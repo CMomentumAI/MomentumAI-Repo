@@ -4,22 +4,23 @@
  * Architecture:
  *  1. Appointment transcripts/summaries are chunked into small passages.
  *  2. Each chunk is embedded with Gemini text-embedding-004.
- *  3. The embedding index is serialized and stored in S3 per patient.
+ *  3. The embedding index is serialized to JSON and stored in S3 per patient.
+ *     (S3 is used because Railway's container filesystem is ephemeral.)
  *  4. At query time the question is embedded and cosine-similarity search
  *     retrieves the top-k relevant chunks.
  *  5. The chunks are injected as context into a Gemini 1.5 Pro chat completion.
  */
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { buildS3Key, downloadFromS3, uploadToS3 } from "./s3";
+import { buildS3Key, downloadFromS3, uploadToS3, S3StorageError } from "./s3";
+import { getEnv } from "./env";
 import type { EmbeddingIndex, EmbeddingRecord, ChatMessage } from "@/types";
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 function getGeminiClient(): GoogleGenerativeAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
-  return new GoogleGenerativeAI(apiKey);
+  const { GEMINI_API_KEY } = getEnv();
+  return new GoogleGenerativeAI(GEMINI_API_KEY);
 }
 
 // ─── Chunking ────────────────────────────────────────────────────────────────
@@ -73,9 +74,21 @@ async function loadEmbeddingIndex(patientId: string): Promise<EmbeddingIndex> {
   const key = buildS3Key(patientId, "embeddings", EMBEDDING_INDEX_FILENAME);
   try {
     const raw = await downloadFromS3(key);
-    return JSON.parse(raw) as EmbeddingIndex;
-  } catch {
-    return { patientId, updatedAt: new Date().toISOString(), records: [] };
+    const parsed = JSON.parse(raw) as EmbeddingIndex;
+    // Validate the parsed structure before returning to prevent subtle bugs
+    // from a corrupted or partially-written index file.
+    if (!Array.isArray(parsed.records)) {
+      return { patientId, updatedAt: new Date().toISOString(), records: [] };
+    }
+    return parsed;
+  } catch (err) {
+    // A missing index is the expected state before any appointments are indexed.
+    if (err instanceof S3StorageError && err.code === "NOT_FOUND") {
+      return { patientId, updatedAt: new Date().toISOString(), records: [] };
+    }
+    // Any other S3 error (permissions, network) should propagate — treating it
+    // as "empty index" would silently degrade RAG quality.
+    throw err;
   }
 }
 
@@ -84,13 +97,17 @@ async function saveEmbeddingIndex(
   index: EmbeddingIndex,
 ): Promise<void> {
   const key = buildS3Key(patientId, "embeddings", EMBEDDING_INDEX_FILENAME);
-  await uploadToS3(key, JSON.stringify(index, null, 2));
+  await uploadToS3(key, JSON.stringify(index, null, 2), "application/json", {
+    category: "embeddings",
+    patientId,
+  });
 }
 
 // ─── Indexing ─────────────────────────────────────────────────────────────────
 
 /**
- * Index a new appointment (transcript + summary) into the patient's embedding store.
+ * Index a new appointment (transcript + summary) into the patient's embedding
+ * store. Replaces any stale records for the same appointmentId.
  */
 export async function indexAppointment(
   patientId: string,
@@ -100,12 +117,12 @@ export async function indexAppointment(
   const chunks = chunkText(text);
   const index = await loadEmbeddingIndex(patientId);
 
-  // Remove any stale records for this appointment
+  // Remove stale records for this appointment before re-indexing.
   index.records = index.records.filter(
     (r) => r.appointmentId !== appointmentId,
   );
 
-  // Embed all chunks (sequential to stay within rate limits)
+  // Embed chunks sequentially to stay within Gemini's rate limits.
   const newRecords: EmbeddingRecord[] = [];
   for (let i = 0; i < chunks.length; i++) {
     const embedding = await embedText(chunks[i]);
@@ -182,7 +199,6 @@ export async function ragChat(
     systemInstruction: SYSTEM_PROMPT + contextBlock,
   });
 
-  // Build chat history in Gemini format
   const geminiHistory = history.map((msg) => ({
     role: msg.role === "user" ? "user" : "model",
     parts: [{ text: msg.content }],
@@ -192,9 +208,7 @@ export async function ragChat(
   const result = await chat.sendMessage(question);
   const answer = result.response.text();
 
-  const sources = [
-    ...new Set(relevantChunks.map((c) => c.appointmentId)),
-  ];
+  const sources = [...new Set(relevantChunks.map((c) => c.appointmentId))];
 
   return { answer, sources };
 }
