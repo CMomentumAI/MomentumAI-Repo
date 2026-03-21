@@ -11,7 +11,7 @@ export interface Patient {
 
 // ─── Appointment ─────────────────────────────────────────────────────────────
 
-export type AppointmentStatus = "pending" | "summarized" | "error";
+export type AppointmentStatus = "pending" | "summarized" | "error" | "deleted";
 
 export interface Appointment {
   id: string;

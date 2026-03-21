@@ -1,8 +1,8 @@
-# MediPlan.ai
+# Momentum
 
 **Your Personal Sovereign Health AI** — understand every appointment, manage prescriptions, and take control of your health journey.
 
-MediPlan.ai is the patient-facing cloud version of the [plan.ai](https://plan.ai) sovereign AI infrastructure philosophy: privacy-first, no unnecessary data sharing, and compounding personal health intelligence over time.
+Momentum is the patient-facing cloud version of the [plan.ai](https://plan.ai) sovereign AI infrastructure philosophy: privacy-first, no unnecessary data sharing, and compounding personal health intelligence over time.
 
 ---
 
@@ -84,7 +84,7 @@ cp .env.example .env.local
 
 | Variable | Description |
 |----------|-------------|
-| `NEXTAUTH_SECRET` | JWT signing secret (min 32 chars) |
+| `JWT_SECRET` | JWT signing secret (min 32 chars) |
 | `AWS_ACCESS_KEY_ID` | AWS credentials |
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials |
 | `AWS_REGION` | S3 bucket region (e.g. `us-east-1`) |

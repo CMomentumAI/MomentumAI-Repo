@@ -90,7 +90,10 @@ export async function getAppointment(
     const raw = await downloadFromS3(
       appointmentMetaKey(patientId, appointmentId),
     );
-    return JSON.parse(raw) as Appointment;
+    const appointment = JSON.parse(raw) as Appointment;
+    // Exclude soft-deleted appointments
+    if (appointment.status === "deleted") return null;
+    return appointment;
   } catch {
     return null;
   }
@@ -130,6 +133,7 @@ export async function listAppointments(
     ids.map((id) => getAppointment(patientId, id)),
   );
 
+  // getAppointment returns null for missing or soft-deleted records
   return appointments
     .filter((a): a is Appointment => a !== null)
     .sort(
@@ -144,10 +148,9 @@ export async function deleteAppointment(
   const existing = await getAppointment(patientId, appointmentId);
   if (!existing) return false;
 
-  // Soft delete: mark as deleted in metadata
+  // Soft delete: mark status as deleted; title is intentionally preserved
   await updateAppointment(patientId, appointmentId, {
-    status: "error",
-    title: `[Deleted] ${existing.title}`,
+    status: "deleted",
   });
 
   return true;
