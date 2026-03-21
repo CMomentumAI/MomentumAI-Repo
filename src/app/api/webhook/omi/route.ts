@@ -10,6 +10,9 @@
  *  5. Store the structured summary back in S3
  *  6. Index chunks into the Gemini RAG embedding store
  *  7. Return 202 immediately so OMI doesn't retry
+ *
+ * This route is intentionally exempt from session auth — it is verified
+ * instead by HMAC-SHA256 signature using OMI_WEBHOOK_SECRET.
  */
 
 import { NextRequest } from "next/server";
@@ -17,11 +20,9 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { buildS3Key, uploadToS3 } from "@/lib/s3";
 import { summarizeAppointmentTranscript } from "@/lib/perplexity";
 import { indexAppointment } from "@/lib/gemini";
-import {
-  createAppointment,
-  updateAppointment,
-} from "@/lib/appointments";
-import { successResponse, errorResponse } from "@/lib/api-helpers";
+import { createAppointment, updateAppointment } from "@/lib/appointments";
+import { successResponse, errorResponse, getRequestId } from "@/lib/api-helpers";
+import { logger } from "@/lib/logger";
 import type { OmiWebhookPayload } from "@/types";
 
 // ─── Signature verification ───────────────────────────────────────────────────
@@ -30,16 +31,25 @@ function verifyOmiSignature(
   rawBody: string,
   signatureHeader: string | null,
 ): boolean {
+  // Read the secret directly from process.env here to avoid triggering full
+  // env validation (which requires all env vars) during a health-check or cold
+  // start before secrets are loaded in development. The webhook handler itself
+  // is the only consumer of this secret.
   const secret = process.env.OMI_WEBHOOK_SECRET;
 
-  // In production, a missing secret is a configuration error — reject the request.
   if (!secret) {
     if (process.env.NODE_ENV === "production") {
+      // Missing secret in production is a mis-configuration — reject all requests.
+      logger.warn(
+        "webhook:omi",
+        "OMI_WEBHOOK_SECRET is not set — rejecting request in production",
+      );
       return false;
     }
-    // In development, warn and allow through so local testing is easier.
-    console.warn(
-      "[omi] OMI_WEBHOOK_SECRET is not set — skipping signature verification (dev only)",
+    // In development, warn and allow through for easier local testing.
+    logger.warn(
+      "webhook:omi",
+      "OMI_WEBHOOK_SECRET is not set — skipping signature verification (dev only)",
     );
     return true;
   }
@@ -61,6 +71,7 @@ function verifyOmiSignature(
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
+  const requestId = getRequestId(request);
   let rawBody: string;
 
   try {
@@ -69,9 +80,9 @@ export async function POST(request: NextRequest) {
     return errorResponse("Failed to read request body", 400);
   }
 
-  // Verify webhook signature
   const signature = request.headers.get("X-OMI-Signature");
   if (!verifyOmiSignature(rawBody, signature)) {
+    logger.warn("webhook:omi", "Invalid webhook signature", { requestId });
     return errorResponse("Invalid webhook signature", 401);
   }
 
@@ -82,20 +93,16 @@ export async function POST(request: NextRequest) {
     return errorResponse("Invalid JSON payload", 400);
   }
 
-  // Validate required fields
   if (!payload.session_id || !Array.isArray(payload.transcript)) {
     return errorResponse("Missing required fields: session_id, transcript", 400);
   }
 
   const patientId = payload.patient_id;
   if (!patientId) {
-    return errorResponse(
-      "patient_id is required in the webhook payload",
-      400,
-    );
+    return errorResponse("patient_id is required in the webhook payload", 400);
   }
 
-  // Build full transcript text from segments
+  // Build full transcript text from segments — do not log the text itself.
   const fullTranscript = payload.transcript
     .map(
       (seg) =>
@@ -104,14 +111,12 @@ export async function POST(request: NextRequest) {
     .join("\n");
 
   try {
-    // 1. Create appointment record immediately
     const appointment = await createAppointment(patientId, {
       title: `Appointment – ${new Date(payload.started_at).toLocaleDateString()}`,
       date: payload.started_at,
       status: "pending",
     });
 
-    // 2. Store raw transcript in S3 synchronously
     const transcriptKey = buildS3Key(
       patientId,
       "transcripts",
@@ -119,12 +124,19 @@ export async function POST(request: NextRequest) {
     );
     await uploadToS3(transcriptKey, fullTranscript, "text/plain");
 
-    // 3. Update transcript key reference
     await updateAppointment(patientId, appointment.id, {
       transcriptS3Key: transcriptKey,
     });
 
-    // 4. Background processing: summarize + index (non-blocking)
+    logger.info("webhook:omi", "Webhook received — processing in background", {
+      requestId,
+      sessionId: payload.session_id,
+      appointmentId: appointment.id,
+      patientId,
+      segmentCount: payload.transcript.length,
+    });
+
+    // Background processing: summarize + index (non-blocking).
     setImmediate(async () => {
       try {
         const summaryData =
@@ -147,7 +159,6 @@ export async function POST(request: NextRequest) {
           status: "summarized",
         });
 
-        // Index for RAG
         const indexText = `${summaryData.summary}\n\n${fullTranscript}`;
         await indexAppointment(patientId, appointment.id, indexText);
 
@@ -158,11 +169,28 @@ export async function POST(request: NextRequest) {
             "embedding_index.json",
           ),
         });
+
+        logger.info("webhook:omi", "Background processing complete", {
+          appointmentId: appointment.id,
+          patientId,
+        });
       } catch (bgError) {
-        console.error("[omi:background]", bgError);
+        logger.error(
+          "webhook:omi:background",
+          "Background processing failed",
+          bgError,
+          { appointmentId: appointment.id, patientId },
+        );
         await updateAppointment(patientId, appointment.id, {
           status: "error",
-        }).catch(console.error);
+        }).catch((e) =>
+          logger.error(
+            "webhook:omi:background",
+            "Failed to mark appointment as error",
+            e,
+            { appointmentId: appointment.id },
+          ),
+        );
       }
     });
 
@@ -172,7 +200,11 @@ export async function POST(request: NextRequest) {
       202,
     );
   } catch (error) {
-    console.error("[omi:POST]", error);
+    logger.error("webhook:omi", "Failed to process webhook", error, {
+      requestId,
+      sessionId: payload.session_id,
+      patientId,
+    });
     return errorResponse("Failed to process webhook", 500);
   }
 }

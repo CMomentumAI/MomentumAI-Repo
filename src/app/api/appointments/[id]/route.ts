@@ -16,7 +16,9 @@ import {
   requireOwnership,
   successResponse,
   errorResponse,
+  getRequestId,
 } from "@/lib/api-helpers";
+import { logger } from "@/lib/logger";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -29,6 +31,7 @@ const PatchSchema = z.object({
 });
 
 export async function GET(request: NextRequest, { params }: RouteContext) {
+  const requestId = getRequestId(request);
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
   const { user } = authResult;
@@ -44,12 +47,17 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
 
     return successResponse(appointment);
   } catch (error) {
-    console.error("[appointments/:id GET]", error);
+    logger.error("appointments/:id:GET", "Failed to fetch appointment", error, {
+      requestId,
+      userId: user.sub,
+      appointmentId: id,
+    });
     return errorResponse("Failed to fetch appointment", 500);
   }
 }
 
 export async function PATCH(request: NextRequest, { params }: RouteContext) {
+  const requestId = getRequestId(request);
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
   const { user } = authResult;
@@ -77,12 +85,18 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     const updated = await updateAppointment(user.sub, id, parsed.data);
     return successResponse(updated);
   } catch (error) {
-    console.error("[appointments/:id PATCH]", error);
+    logger.error(
+      "appointments/:id:PATCH",
+      "Failed to update appointment",
+      error,
+      { requestId, userId: user.sub, appointmentId: id },
+    );
     return errorResponse("Failed to update appointment", 500);
   }
 }
 
 export async function DELETE(request: NextRequest, { params }: RouteContext) {
+  const requestId = getRequestId(request);
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
   const { user } = authResult;
@@ -97,9 +111,21 @@ export async function DELETE(request: NextRequest, { params }: RouteContext) {
     if (ownership) return ownership;
 
     await deleteAppointment(user.sub, id);
+
+    logger.info("appointments/:id:DELETE", "Appointment deleted", {
+      requestId,
+      userId: user.sub,
+      appointmentId: id,
+    });
+
     return successResponse(null, "Appointment deleted");
   } catch (error) {
-    console.error("[appointments/:id DELETE]", error);
+    logger.error(
+      "appointments/:id:DELETE",
+      "Failed to delete appointment",
+      error,
+      { requestId, userId: user.sub, appointmentId: id },
+    );
     return errorResponse("Failed to delete appointment", 500);
   }
 }

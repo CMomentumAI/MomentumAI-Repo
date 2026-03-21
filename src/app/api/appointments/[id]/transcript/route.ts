@@ -14,7 +14,9 @@ import {
   requireOwnership,
   successResponse,
   errorResponse,
+  getRequestId,
 } from "@/lib/api-helpers";
+import { logger } from "@/lib/logger";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -26,6 +28,7 @@ const TranscriptSchema = z.object({
 });
 
 export async function POST(request: NextRequest, { params }: RouteContext) {
+  const requestId = getRequestId(request);
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
   const { user } = authResult;
@@ -52,7 +55,6 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 
     const { transcript } = parsed.data;
 
-    // Store in S3
     const transcriptKey = buildS3Key(
       user.sub,
       "transcripts",
@@ -60,11 +62,17 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     );
     await uploadToS3(transcriptKey, transcript, "text/plain");
 
-    // Update appointment record
     const updated = await updateAppointment(user.sub, id, {
       rawTranscript: transcript,
       transcriptS3Key: transcriptKey,
       status: "pending",
+    });
+
+    logger.info("appointments/:id:transcript", "Transcript uploaded", {
+      requestId,
+      userId: user.sub,
+      appointmentId: id,
+      transcriptBytes: transcript.length,
     });
 
     return successResponse(
@@ -72,7 +80,12 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       "Transcript uploaded. POST to /summarize to process it.",
     );
   } catch (error) {
-    console.error("[transcript:POST]", error);
+    logger.error(
+      "appointments/:id:transcript",
+      "Failed to upload transcript",
+      error,
+      { requestId, userId: user.sub, appointmentId: id },
+    );
     return errorResponse("Failed to upload transcript", 500);
   }
 }

@@ -13,7 +13,13 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { ragChat } from "@/lib/gemini";
-import { requireAuth, successResponse, errorResponse } from "@/lib/api-helpers";
+import {
+  requireAuth,
+  successResponse,
+  errorResponse,
+  getRequestId,
+} from "@/lib/api-helpers";
+import { logger } from "@/lib/logger";
 
 const ChatSchema = z.object({
   message: z.string().min(1, "Message cannot be empty").max(2000),
@@ -30,6 +36,7 @@ const ChatSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  const requestId = getRequestId(request);
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
   const { user } = authResult;
@@ -50,11 +57,21 @@ export async function POST(request: NextRequest) {
 
     const { answer, sources } = await ragChat(user.sub, message, history);
 
+    logger.info("chat:POST", "Chat request handled", {
+      requestId,
+      userId: user.sub,
+      historyLength: history.length,
+      sourceCount: sources?.length ?? 0,
+    });
+
     return successResponse({ answer, sources });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Chat failed";
-    console.error("[chat:POST]", error);
+    logger.error("chat:POST", "Chat request failed", error, {
+      requestId,
+      userId: user.sub,
+    });
 
     if (message.includes("GEMINI_API_KEY")) {
       return errorResponse("AI service is not configured", 503);

@@ -16,11 +16,14 @@ import {
   requireOwnership,
   successResponse,
   errorResponse,
+  getRequestId,
 } from "@/lib/api-helpers";
+import { logger } from "@/lib/logger";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function POST(request: NextRequest, { params }: RouteContext) {
+  const requestId = getRequestId(request);
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
   const { user } = authResult;
@@ -42,10 +45,8 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       );
     }
 
-    // Update status to pending before processing
     await updateAppointment(user.sub, id, { status: "pending" });
 
-    // Summarize
     const summaryData = await summarizeAppointmentTranscript(transcript);
 
     const summaryKey = buildS3Key(
@@ -55,11 +56,9 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     );
     await uploadToS3(summaryKey, JSON.stringify(summaryData, null, 2));
 
-    // Index for RAG
     const indexText = `${summaryData.summary}\n\n${transcript}`;
     await indexAppointment(user.sub, id, indexText);
 
-    // Update appointment record
     const updated = await updateAppointment(user.sub, id, {
       summary: summaryData.summary,
       keyPoints: summaryData.keyPoints,
@@ -70,13 +69,28 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       status: "summarized",
     });
 
+    logger.info("appointments/:id:summarize", "Appointment summarized", {
+      requestId,
+      userId: user.sub,
+      appointmentId: id,
+    });
+
     return successResponse(updated, "Appointment summarized successfully");
   } catch (error) {
-    console.error("[summarize:POST]", error);
+    logger.error(
+      "appointments/:id:summarize",
+      "Summarization failed",
+      error,
+      { requestId, userId: user.sub, appointmentId: id },
+    );
 
-    // Mark as error
-    await updateAppointment(user.sub, id, { status: "error" }).catch(
-      console.error,
+    await updateAppointment(user.sub, id, { status: "error" }).catch((e) =>
+      logger.error(
+        "appointments/:id:summarize",
+        "Failed to mark appointment as error",
+        e,
+        { requestId, appointmentId: id },
+      ),
     );
 
     return errorResponse("Failed to summarize appointment", 500);
