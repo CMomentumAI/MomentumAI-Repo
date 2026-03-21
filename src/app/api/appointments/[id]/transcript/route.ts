@@ -3,6 +3,10 @@
  *
  * Upload or update the raw transcript text for an appointment.
  * After upload, the caller should POST to /summarize to trigger AI processing.
+ *
+ * Transcript text is stored in S3 (not on local disk) because Railway's
+ * container filesystem is ephemeral — files written at runtime are lost on
+ * every redeploy or restart.
  */
 
 import { NextRequest } from "next/server";
@@ -55,16 +59,26 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 
     const { transcript } = parsed.data;
 
+    // Store in S3 with content-type and size validation.
+    // Category "transcripts" enforces the 1 MB byte-size limit server-side.
     const transcriptKey = buildS3Key(
       user.sub,
       "transcripts",
       `${id}_transcript.txt`,
     );
-    await uploadToS3(transcriptKey, transcript, "text/plain");
+    await uploadToS3(transcriptKey, transcript, "text/plain", {
+      category: "transcripts",
+      patientId: user.sub,
+    });
+
+    // Record the byte size alongside the S3 key so consumers can plan
+    // without an extra HEAD request.
+    const transcriptSizeBytes = Buffer.byteLength(transcript, "utf-8");
 
     const updated = await updateAppointment(user.sub, id, {
       rawTranscript: transcript,
       transcriptS3Key: transcriptKey,
+      transcriptSizeBytes,
       status: "pending",
     });
 
@@ -72,7 +86,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       requestId,
       userId: user.sub,
       appointmentId: id,
-      transcriptBytes: transcript.length,
+      transcriptBytes: transcriptSizeBytes,
     });
 
     return successResponse(

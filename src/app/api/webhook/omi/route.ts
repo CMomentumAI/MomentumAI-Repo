@@ -122,7 +122,12 @@ export async function POST(request: NextRequest) {
       "transcripts",
       `${appointment.id}_transcript.txt`,
     );
-    await uploadToS3(transcriptKey, fullTranscript, "text/plain");
+    // Store in S3 — Railway's container filesystem is ephemeral and would lose
+    // this file on the next redeploy. Category validation enforces the 1 MB limit.
+    await uploadToS3(transcriptKey, fullTranscript, "text/plain", {
+      category: "transcripts",
+      patientId,
+    });
 
     await updateAppointment(patientId, appointment.id, {
       transcriptS3Key: transcriptKey,
@@ -142,20 +147,28 @@ export async function POST(request: NextRequest) {
         const summaryData =
           await summarizeAppointmentTranscript(fullTranscript);
 
+        const summaryPayload = JSON.stringify(summaryData, null, 2);
+        const summarySizeBytes = Buffer.byteLength(summaryPayload, "utf-8");
+
         const summaryKey = buildS3Key(
           patientId,
           "summaries",
           `${appointment.id}_summary.json`,
         );
-        await uploadToS3(summaryKey, JSON.stringify(summaryData, null, 2));
+        await uploadToS3(summaryKey, summaryPayload, "application/json", {
+          category: "summaries",
+          patientId,
+        });
 
         await updateAppointment(patientId, appointment.id, {
           rawTranscript: fullTranscript,
+          transcriptSizeBytes: Buffer.byteLength(fullTranscript, "utf-8"),
           summary: summaryData.summary,
           keyPoints: summaryData.keyPoints,
           prescriptions: summaryData.prescriptions,
           followUps: summaryData.followUps,
           summaryS3Key: summaryKey,
+          summarySizeBytes,
           status: "summarized",
         });
 
