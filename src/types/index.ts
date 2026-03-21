@@ -30,9 +30,36 @@ export interface Appointment {
   transcriptS3Key?: string;
   summaryS3Key?: string;
   embeddingS3Key?: string;
+  /** Byte size of the stored transcript object in S3, recorded at upload time. */
+  transcriptSizeBytes?: number;
+  /** Byte size of the stored summary object in S3, recorded at upload time. */
+  summarySizeBytes?: number;
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * Fields that callers may supply when creating a new appointment.
+ * Immutable identity fields (id, patientId, createdAt) are excluded.
+ */
+export type AppointmentCreateInput = Pick<
+  Appointment,
+  | "title"
+  | "doctorName"
+  | "specialty"
+  | "date"
+  | "rawTranscript"
+  | "status"
+>;
+
+/**
+ * Fields that callers may supply when updating an existing appointment.
+ * Identity and immutable audit fields are excluded.
+ */
+export type AppointmentUpdate = Omit<
+  Partial<Appointment>,
+  "id" | "patientId" | "createdAt"
+>;
 
 export interface Prescription {
   medication: string;
