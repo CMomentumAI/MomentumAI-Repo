@@ -7,7 +7,14 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { createUser } from "@/lib/users";
 import { signToken } from "@/lib/auth";
-import { successResponse, errorResponse } from "@/lib/api-helpers";
+import {
+  successResponse,
+  errorResponse,
+  rateLimitResponse,
+  getRequestId,
+} from "@/lib/api-helpers";
+import { logger } from "@/lib/logger";
+import { authLimiter, getClientIp } from "@/lib/rate-limit";
 
 const RegisterSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -20,6 +27,16 @@ const RegisterSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  const requestId = getRequestId(request);
+
+  // Rate-limit registrations by IP to prevent account-creation abuse.
+  const ip = getClientIp(request);
+  const rl = authLimiter.check(ip);
+  if (!rl.allowed) {
+    logger.warn("auth:register", "Rate limit exceeded", { requestId, ip });
+    return rateLimitResponse(rl.resetAt);
+  }
+
   try {
     const body = await request.json();
     const parsed = RegisterSchema.safeParse(body);
@@ -42,6 +59,11 @@ export async function POST(request: NextRequest) {
       name: patient.name,
     });
 
+    logger.info("auth:register", "Account created", {
+      requestId,
+      userId: patient.id,
+    });
+
     return successResponse(
       { patient, token },
       "Account created successfully",
@@ -55,7 +77,7 @@ export async function POST(request: NextRequest) {
       return errorResponse(message, 409);
     }
 
-    console.error("[register]", error);
+    logger.error("auth:register", "Registration failed", error, { requestId });
     return errorResponse("Internal server error", 500);
   }
 }

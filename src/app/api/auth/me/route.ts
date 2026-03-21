@@ -5,9 +5,16 @@
 
 import { NextRequest } from "next/server";
 import { getUserById } from "@/lib/users";
-import { requireAuth, successResponse, errorResponse } from "@/lib/api-helpers";
+import {
+  requireAuth,
+  successResponse,
+  errorResponse,
+  getRequestId,
+} from "@/lib/api-helpers";
+import { logger } from "@/lib/logger";
 
 export async function GET(request: NextRequest) {
+  const requestId = getRequestId(request);
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
 
@@ -19,7 +26,10 @@ export async function GET(request: NextRequest) {
 
     return successResponse(patient);
   } catch (error) {
-    console.error("[me]", error);
+    logger.error("auth:me", "Failed to fetch current user", error, {
+      requestId,
+      userId: user.sub,
+    });
     return errorResponse("Internal server error", 500);
   }
 }

@@ -18,7 +18,14 @@ import { z } from "zod";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getAppointment, listAppointments } from "@/lib/appointments";
 import { getUserById } from "@/lib/users";
-import { requireAuth, successResponse, errorResponse } from "@/lib/api-helpers";
+import { getEnv } from "@/lib/env";
+import {
+  requireAuth,
+  successResponse,
+  errorResponse,
+  getRequestId,
+} from "@/lib/api-helpers";
+import { logger } from "@/lib/logger";
 import type { PaperworkResponse } from "@/types";
 
 const FORM_TYPES = ["intake", "prescription", "referral", "insurance"] as const;
@@ -29,9 +36,8 @@ const PaperworkSchema = z.object({
 });
 
 function getGeminiClient(): GoogleGenerativeAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
-  return new GoogleGenerativeAI(apiKey);
+  const { GEMINI_API_KEY } = getEnv();
+  return new GoogleGenerativeAI(GEMINI_API_KEY);
 }
 
 const FORM_TEMPLATES: Record<string, string> = {
@@ -120,6 +126,7 @@ If information is not available, leave the value as an empty string.`;
 }
 
 export async function POST(request: NextRequest) {
+  const requestId = getRequestId(request);
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
   const { user } = authResult;
@@ -138,7 +145,6 @@ export async function POST(request: NextRequest) {
 
     const { formType, appointmentId } = parsed.data;
 
-    // Build patient context from profile + appointment history
     const [patient, appointments] = await Promise.all([
       getUserById(user.sub),
       listAppointments(user.sub),
@@ -182,11 +188,22 @@ ${summaries || "No appointment history available"}
 
     const formData = await autoFillForm(formType, patientContext);
 
+    logger.info("paperwork:POST", "Paperwork generated", {
+      requestId,
+      userId: user.sub,
+      formType,
+      appointmentId,
+      fieldCount: formData.fields.length,
+    });
+
     return successResponse(formData);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Paperwork generation failed";
-    console.error("[paperwork:POST]", error);
+    logger.error("paperwork:POST", "Paperwork generation failed", error, {
+      requestId,
+      userId: user.sub,
+    });
 
     if (message.includes("GEMINI_API_KEY")) {
       return errorResponse("AI service is not configured", 503);

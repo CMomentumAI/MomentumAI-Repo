@@ -7,7 +7,14 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { getUserByEmail, verifyPassword } from "@/lib/users";
 import { signToken } from "@/lib/auth";
-import { successResponse, errorResponse } from "@/lib/api-helpers";
+import {
+  successResponse,
+  errorResponse,
+  rateLimitResponse,
+  getRequestId,
+} from "@/lib/api-helpers";
+import { logger } from "@/lib/logger";
+import { authLimiter, getClientIp } from "@/lib/rate-limit";
 
 const LoginSchema = z.object({
   email: z.string().email(),
@@ -15,6 +22,16 @@ const LoginSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  const requestId = getRequestId(request);
+
+  // Rate-limit by client IP to slow credential-stuffing attacks.
+  const ip = getClientIp(request);
+  const rl = authLimiter.check(ip);
+  if (!rl.allowed) {
+    logger.warn("auth:login", "Rate limit exceeded", { requestId, ip });
+    return rateLimitResponse(rl.resetAt);
+  }
+
   try {
     const body = await request.json();
     const parsed = LoginSchema.safeParse(body);
@@ -28,7 +45,7 @@ export async function POST(request: NextRequest) {
     const user = await getUserByEmail(email);
 
     if (!user) {
-      // Constant-time failure — don't reveal whether email exists
+      // Constant-time failure — don't reveal whether the email exists.
       await new Promise((r) => setTimeout(r, 500));
       return errorResponse("Invalid email or password", 401);
     }
@@ -46,9 +63,16 @@ export async function POST(request: NextRequest) {
 
     const { passwordHash: _pw, ...patient } = user;
 
+    logger.info("auth:login", "Login successful", {
+      requestId,
+      userId: user.id,
+    });
+
     return successResponse({ patient, token }, "Logged in successfully");
   } catch (error) {
-    console.error("[login]", error);
+    logger.error("auth:login", "Login failed unexpectedly", error, {
+      requestId,
+    });
     return errorResponse("Internal server error", 500);
   }
 }
