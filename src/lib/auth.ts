@@ -1,6 +1,5 @@
 /**
  * Auth utilities — JWT-based session tokens.
- * NextAuth.js is configured separately in /api/auth/[...nextauth]/route.ts.
  */
 
 import jwt from "jsonwebtoken";
@@ -16,9 +15,9 @@ export interface JWTPayload {
 const TOKEN_EXPIRY = "7d";
 
 function getSecret(): string {
-  const secret = process.env.NEXTAUTH_SECRET ?? process.env.JWT_SECRET;
+  const secret = process.env.JWT_SECRET ?? process.env.NEXTAUTH_SECRET;
   if (!secret) {
-    throw new Error("NEXTAUTH_SECRET environment variable must be set.");
+    throw new Error("JWT_SECRET environment variable must be set.");
   }
   return secret;
 }

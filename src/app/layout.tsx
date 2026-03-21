@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MediPlan.ai — Your Personal Health AI",
+  title: "Momentum — Your Personal Health AI",
   description:
     "Sovereign patient health intelligence. Understand your appointments, manage prescriptions, and take control of your health journey.",
 };

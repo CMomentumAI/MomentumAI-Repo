@@ -150,7 +150,7 @@ export async function retrieveRelevantChunks(
 
 // ─── Chat with RAG ────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are MediPlan, a patient's personal health AI assistant.
+const SYSTEM_PROMPT = `You are Momentum, a patient's personal health AI assistant.
 You have access to the patient's medical history and appointment records.
 Always answer based on the provided context. Be empathetic, clear, and precise.
 Never fabricate medical information. If unsure, advise the patient to consult their doctor.
