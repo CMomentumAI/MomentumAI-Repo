@@ -63,6 +63,15 @@ type Env = z.infer<typeof envSchema>;
 let _env: Env | null = null;
 
 /**
+ * Reset the singleton cache so the next call to getEnv() re-reads process.env.
+ *
+ * @internal ONLY use this in tests — never in production code.
+ */
+export function resetEnvCache(): void {
+  _env = null;
+}
+
+/**
  * Returns the validated environment config. Validates once on first call;
  * subsequent calls return the cached result.
  * Throws a descriptive error if any required variable is missing or invalid.

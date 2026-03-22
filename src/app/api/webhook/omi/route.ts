@@ -26,8 +26,8 @@
 
 import { NextRequest } from "next/server";
 import { after } from "next/server";
-import { createHmac, timingSafeEqual } from "crypto";
 import { buildS3Key, uploadToS3 } from "@/lib/s3";
+import { verifyOmiSignature } from "@/lib/webhook-utils";
 import {
   createAppointment,
   findAppointmentBySessionId,
@@ -37,45 +37,6 @@ import { processAppointment } from "@/lib/ai-pipeline";
 import { successResponse, errorResponse, getRequestId } from "@/lib/api-helpers";
 import { logger } from "@/lib/logger";
 import type { OmiWebhookPayload } from "@/types";
-
-// ─── Signature verification ───────────────────────────────────────────────────
-
-function verifyOmiSignature(
-  rawBody: string,
-  signatureHeader: string | null,
-): boolean {
-  // Read the secret directly from process.env to avoid triggering full env
-  // validation (which requires all vars) on cold starts in development.
-  const secret = process.env.OMI_WEBHOOK_SECRET;
-
-  if (!secret) {
-    if (process.env.NODE_ENV === "production") {
-      logger.warn(
-        "webhook:omi",
-        "OMI_WEBHOOK_SECRET is not set — rejecting request in production",
-      );
-      return false;
-    }
-    logger.warn(
-      "webhook:omi",
-      "OMI_WEBHOOK_SECRET is not set — skipping signature verification (dev only)",
-    );
-    return true;
-  }
-
-  if (!signatureHeader) return false;
-
-  const expected = `sha256=${createHmac("sha256", secret)
-    .update(rawBody, "utf8")
-    .digest("hex")}`;
-
-  const expectedBuf = Buffer.from(expected);
-  const receivedBuf = Buffer.from(signatureHeader);
-
-  if (expectedBuf.length !== receivedBuf.length) return false;
-
-  return timingSafeEqual(expectedBuf, receivedBuf);
-}
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
@@ -90,7 +51,11 @@ export async function POST(request: NextRequest) {
   }
 
   const signature = request.headers.get("X-OMI-Signature");
-  if (!verifyOmiSignature(rawBody, signature)) {
+  if (
+    !verifyOmiSignature(rawBody, signature, (msg) =>
+      logger.warn("webhook:omi", msg, { requestId }),
+    )
+  ) {
     logger.warn("webhook:omi", "Invalid webhook signature", { requestId });
     return errorResponse("Invalid webhook signature", 401);
   }
