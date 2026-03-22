@@ -74,7 +74,12 @@ export async function POST(request: NextRequest) {
       error instanceof Error ? error.message : "Failed to create account";
 
     if (message.includes("already exists")) {
-      return errorResponse(message, 409);
+      // Audit duplicate registration attempt without logging the email (PHI).
+      logger.warn("auth:register", "Registration rejected — email already in use", {
+        requestId,
+        ip,
+      });
+      return errorResponse("A user with this email already exists.", 409);
     }
 
     logger.error("auth:register", "Registration failed", error, { requestId });

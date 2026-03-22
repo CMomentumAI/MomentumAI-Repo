@@ -21,7 +21,15 @@ const TTSSchema = z.object({
     .string()
     .min(1, "Text cannot be empty")
     .max(MAX_TTS_CHARS, `Text must be under ${MAX_TTS_CHARS} characters`),
-  voiceId: z.string().optional(),
+  // ElevenLabs voice IDs are alphanumeric strings (20–24 chars).
+  // Validate format to prevent path injection into the ElevenLabs API URL.
+  voiceId: z
+    .string()
+    .regex(
+      /^[a-zA-Z0-9]{1,50}$/,
+      "voiceId must be alphanumeric (no spaces or special characters)",
+    )
+    .optional(),
 });
 
 export async function POST(request: NextRequest) {

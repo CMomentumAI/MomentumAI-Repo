@@ -27,7 +27,7 @@ const PatchSchema = z.object({
   doctorName: z.string().max(100).optional(),
   specialty: z.string().max(100).optional(),
   date: z.string().datetime().optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(10_000).optional(),
 });
 
 export async function GET(request: NextRequest, { params }: RouteContext) {
@@ -83,7 +83,14 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     }
 
     const updated = await updateAppointment(user.sub, id, parsed.data);
-    return successResponse(updated);
+
+    logger.info("appointments/:id:PATCH", "Appointment updated", {
+      requestId,
+      userId: user.sub,
+      appointmentId: id,
+    });
+
+    return successResponse(updated, "Appointment updated");
   } catch (error) {
     logger.error(
       "appointments/:id:PATCH",

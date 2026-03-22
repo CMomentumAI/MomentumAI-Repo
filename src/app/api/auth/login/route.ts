@@ -47,11 +47,20 @@ export async function POST(request: NextRequest) {
     if (!user) {
       // Constant-time failure — don't reveal whether the email exists.
       await new Promise((r) => setTimeout(r, 500));
+      // Audit failed attempt without logging the email (PHI).
+      logger.warn("auth:login", "Login failed — email not found", {
+        requestId,
+        ip,
+      });
       return errorResponse("Invalid email or password", 401);
     }
 
     const valid = await verifyPassword(password, user.passwordHash);
     if (!valid) {
+      logger.warn("auth:login", "Login failed — wrong password", {
+        requestId,
+        userId: user.id,
+      });
       return errorResponse("Invalid email or password", 401);
     }
 

@@ -19,6 +19,8 @@ export interface Appointment {
   title: string;
   doctorName?: string;
   specialty?: string;
+  /** Free-text clinical notes added by the patient or via PATCH. */
+  notes?: string;
   date: string;
   rawTranscript?: string;
   summary?: string;
@@ -69,6 +71,7 @@ export type AppointmentCreateInput = Pick<
   | "title"
   | "doctorName"
   | "specialty"
+  | "notes"
   | "date"
   | "rawTranscript"
   | "status"
