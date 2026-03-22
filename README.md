@@ -42,19 +42,22 @@ All authenticated endpoints require the header: `Authorization: Bearer <token>`
 |--------|----------|-------------|
 | `POST` | `/api/auth/register` | Create patient account; returns `{ patient, token }` |
 | `POST` | `/api/auth/login` | Authenticate; returns `{ patient, token }` |
+| `POST` | `/api/auth/logout` | Revoke current JWT (adds to in-process denylist) |
 | `GET` | `/api/auth/me` | Current patient profile (no password hash) |
 
 ### Appointments
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/appointments` | List all non-deleted appointments (sorted by date desc) |
+| `GET` | `/api/appointments` | List appointments, paginated (`?page=1&limit=20`); returns `{ items, pagination }` |
 | `POST` | `/api/appointments` | Create appointment manually |
-| `GET` | `/api/appointments/:id` | Fetch a single appointment |
+| `GET` | `/api/appointments/:id` | Fetch a single appointment (rawTranscript omitted) |
 | `PATCH` | `/api/appointments/:id` | Update title, doctorName, specialty, date, notes |
 | `DELETE` | `/api/appointments/:id` | Soft-delete (status → "deleted") |
 | `POST` | `/api/appointments/:id/transcript` | Upload raw transcript text (max 100 KB) |
+| `GET` | `/api/appointments/:id/transcript` | Get 5-min presigned S3 URL to download transcript |
 | `POST` | `/api/appointments/:id/summarize` | Trigger AI summarization + RAG indexing |
+| `GET` | `/api/appointments/:id/summary` | Get 5-min presigned S3 URL to download summary JSON |
 
 ### AI Features
 
@@ -171,7 +174,7 @@ The app runs at `http://localhost:3000`. All API endpoints are at `/api/**`.
 
 ### Seed demo data
 
-To populate the database with a fictional demo patient and two synthetic appointments (no AI API keys needed for the seed — summaries are pre-written):
+To populate S3 with a fictional demo patient and two synthetic appointments (no AI API keys needed for the seed — summaries are pre-written):
 
 ```bash
 npm run seed
@@ -301,17 +304,17 @@ Log format:
 | AI — RAG / Q&A | Google Gemini 1.5 Pro + `text-embedding-004` |
 | AI — Voice | ElevenLabs `eleven_turbo_v2` |
 | Deployment | Railway (Dockerfile, `output: "standalone"`) |
-| Testing | Vitest 4 — 126 tests, all offline |
+| Testing | Vitest 4 — 155 tests, all offline |
 
 ---
 
 ## Known Limitations
 
 - **Single-instance only:** The in-memory rate limiter and S3 read-then-write index pattern are not safe for multiple replicas. Scale horizontally only after migrating to a shared store (Redis, DynamoDB, or a relational DB).
-- **No token revocation:** JWTs are stateless — a leaked token is valid until the 7-day TTL expires. Mitigation: shorten the TTL or add a Redis-backed denylist.
+- **In-process token denylist:** `POST /api/auth/logout` revokes a token via an in-memory denylist keyed by `sub:iat`. Clients should also discard the token locally. The denylist **does not survive container restarts or Railway redeploys** — after a restart a revoked token is valid again until its 7-day TTL expires. For guaranteed revocation, replace the denylist with a Redis-backed store.
 - **Background work survives SIGTERM but not SIGKILL:** `after()` callbacks (AI pipeline) wait for graceful shutdown on Railway deploy. If the SIGKILL deadline is reached mid-summarization, the appointment stays in `status: "pending"`. Recover by calling `POST /api/appointments/:id/summarize`.
 - **S3 key migration required on first deploy:** All keys gained a `{NODE_ENV}/` prefix. Existing data written before this change is inaccessible without a one-time S3 copy/rename.
-- **No soft-delete cleanup:** Deleted appointments are soft-deleted (status flag only); their S3 artifacts (transcripts, summaries, audio) are not removed. A data-retention job is needed for regulatory compliance.
+- **Soft-delete leaves S3 artifacts:** Deleted appointments are soft-deleted (status flag only); their S3 artifacts (transcripts, summaries, embeddings) are not removed automatically. Run `npm run cleanup` (dry-run by default, add `--delete` to execute) to purge artifacts for soft-deleted appointments. See `docs/ops.md` for scheduling guidance.
 
 ---
 
