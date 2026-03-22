@@ -1,11 +1,22 @@
-# Railway configuration for MediPlan.ai
+# Railway deployment configuration for Momentum
+
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "./Dockerfile"
 
 [deploy]
+# CMD in Dockerfile sets the default; this makes it explicit in Railway's UI.
 startCommand = "node server.js"
+
+# Railway hits this endpoint to confirm the container is ready to serve traffic.
+# Returns HTTP 200 with a JSON body including env-config readiness signals.
 healthcheckPath = "/api/health"
-healthcheckTimeout = 30
+
+# Allow up to 300 s for the standalone Next.js server to start and warm up
+# on initial deploy or after a container restart.
+healthcheckTimeout = 300
+
+# Restart automatically on unexpected crashes; give up after 3 consecutive
+# failures so a misconfigured deployment doesn't loop forever.
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
