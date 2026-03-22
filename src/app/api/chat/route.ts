@@ -17,9 +17,11 @@ import {
   requireAuth,
   successResponse,
   errorResponse,
+  rateLimitResponse,
   getRequestId,
 } from "@/lib/api-helpers";
 import { logger } from "@/lib/logger";
+import { apiLimiter } from "@/lib/rate-limit";
 
 const ChatSchema = z.object({
   message: z.string().min(1, "Message cannot be empty").max(2000),
@@ -42,6 +44,13 @@ export async function POST(request: NextRequest) {
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
   const { user } = authResult;
+
+  // Per-user rate limit for AI-heavy endpoints (120 req/60s per userId).
+  const rl = apiLimiter.check(user.sub);
+  if (!rl.allowed) {
+    logger.warn("chat:POST", "Rate limit exceeded", { requestId, userId: user.sub });
+    return rateLimitResponse(rl.resetAt);
+  }
 
   try {
     const body = await request.json();

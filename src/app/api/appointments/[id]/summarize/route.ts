@@ -26,6 +26,7 @@ import {
   successResponse,
   errorResponse,
   getRequestId,
+  toSafeAppointment,
 } from "@/lib/api-helpers";
 import { logger } from "@/lib/logger";
 
@@ -73,7 +74,10 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       appointmentId: id,
     });
 
-    return successResponse(updated, "Appointment summarized successfully");
+    return successResponse(
+      updated ? toSafeAppointment(updated) : null,
+      "Appointment summarized successfully",
+    );
   } catch (error) {
     // processAppointment already updated status to "error" and logged the
     // failure — we just need to return an appropriate HTTP error here.

@@ -5,7 +5,8 @@
 import { NextResponse } from "next/server";
 import { extractTokenFromHeader } from "./auth";
 import type { JWTPayload } from "./auth";
-import type { ApiSuccess, ApiError } from "@/types";
+import { isTokenDenied } from "./token-denylist";
+import type { ApiSuccess, ApiError, Appointment, AppointmentSummaryView } from "@/types";
 
 // ─── Request correlation ───────────────────────────────────────────────────────
 
@@ -69,7 +70,32 @@ export function requireAuth(
     return errorResponse("Unauthorized — valid Bearer token required.", 401);
   }
 
+  // Check whether this specific token has been explicitly revoked via logout.
+  if (isTokenDenied(user)) {
+    return errorResponse("Token has been revoked — please log in again.", 401);
+  }
+
   return { user };
+}
+
+// ─── PHI-safe appointment view ────────────────────────────────────────────────
+
+/**
+ * Strip `rawTranscript` from an appointment before sending it to clients.
+ *
+ * `rawTranscript` can be up to 100 KB of PHI and must not be included in
+ * list or detail API responses. Clients that need the transcript text should
+ * use GET /api/appointments/:id/transcript to obtain a short-lived presigned
+ * S3 download URL.
+ *
+ * `hasTranscript` indicates whether a transcript is available for download.
+ */
+export function toSafeAppointment(a: Appointment): AppointmentSummaryView {
+  const { rawTranscript, ...rest } = a;
+  return {
+    ...rest,
+    hasTranscript: rawTranscript !== undefined || !!a.transcriptS3Key,
+  };
 }
 
 /**

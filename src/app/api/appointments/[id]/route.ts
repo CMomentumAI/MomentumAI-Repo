@@ -17,6 +17,7 @@ import {
   successResponse,
   errorResponse,
   getRequestId,
+  toSafeAppointment,
 } from "@/lib/api-helpers";
 import { logger } from "@/lib/logger";
 
@@ -45,7 +46,9 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
     const ownership = requireOwnership(user, appointment.patientId);
     if (ownership) return ownership;
 
-    return successResponse(appointment);
+    // Strip rawTranscript — it is PHI and can be up to 100 KB.
+    // Use GET /api/appointments/:id/transcript to obtain a presigned download URL.
+    return successResponse(toSafeAppointment(appointment));
   } catch (error) {
     logger.error("appointments/:id:GET", "Failed to fetch appointment", error, {
       requestId,
@@ -90,7 +93,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
       appointmentId: id,
     });
 
-    return successResponse(updated, "Appointment updated");
+    return successResponse(updated ? toSafeAppointment(updated) : null, "Appointment updated");
   } catch (error) {
     logger.error(
       "appointments/:id:PATCH",

@@ -1,0 +1,640 @@
+openapi: 3.1.0
+
+info:
+  title: Momentum API
+  version: 0.1.0
+  description: |
+    Privacy-first patient health intelligence backend.
+    All data lives in AWS S3. No relational database is used.
+
+    **Auth:** All endpoints except `/api/health`, `/api/auth/register`,
+    `/api/auth/login`, and `/api/webhook/omi` require `Authorization: Bearer <token>`.
+    The webhook uses HMAC-SHA256 (`X-OMI-Signature`) instead of JWT.
+
+servers:
+  - url: https://your-app.railway.app
+    description: Production (Railway)
+  - url: http://localhost:3000
+    description: Local dev
+
+tags:
+  - name: auth
+  - name: appointments
+  - name: files
+  - name: ai
+  - name: webhook
+  - name: system
+
+# ─── Reusable components ──────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ApiError:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+        details:
+          nullable: true
+
+    Patient:
+      type: object
+      required: [id, email, name, createdAt, updatedAt]
+      properties:
+        id:          { type: string, format: uuid }
+        email:       { type: string, format: email }
+        name:        { type: string }
+        dateOfBirth: { type: string, format: date, nullable: true }
+        createdAt:   { type: string, format: date-time }
+        updatedAt:   { type: string, format: date-time }
+
+    Appointment:
+      type: object
+      description: |
+        Safe view of an appointment. `rawTranscript` is intentionally omitted.
+        Use GET /api/appointments/{id}/transcript to obtain a presigned download URL.
+      required: [id, patientId, title, date, status, hasTranscript, createdAt, updatedAt]
+      properties:
+        id:                  { type: string, format: uuid }
+        patientId:           { type: string, format: uuid }
+        title:               { type: string }
+        doctorName:          { type: string, nullable: true }
+        specialty:           { type: string, nullable: true }
+        notes:               { type: string, nullable: true }
+        date:                { type: string, format: date-time }
+        summary:             { type: string, nullable: true }
+        keyPoints:           { type: array, items: { type: string }, nullable: true }
+        prescriptions:       { type: array, items: { $ref: '#/components/schemas/Prescription' }, nullable: true }
+        followUps:           { type: array, items: { type: string }, nullable: true }
+        status:              { type: string, enum: [pending, summarized, error, deleted] }
+        hasTranscript:       { type: boolean }
+        transcriptS3Key:     { type: string, nullable: true }
+        summaryS3Key:        { type: string, nullable: true }
+        transcriptSizeBytes: { type: integer, nullable: true }
+        summarySizeBytes:    { type: integer, nullable: true }
+        processingStartedAt:    { type: string, format: date-time, nullable: true }
+        processingCompletedAt:  { type: string, format: date-time, nullable: true }
+        processingFailedAt:     { type: string, format: date-time, nullable: true }
+        processingError:        { type: string, nullable: true }
+        processingModel:        { type: string, nullable: true }
+        sessionId:              { type: string, nullable: true }
+        createdAt:           { type: string, format: date-time }
+        updatedAt:           { type: string, format: date-time }
+
+    Prescription:
+      type: object
+      required: [medication, dosage, frequency]
+      properties:
+        medication: { type: string }
+        dosage:     { type: string }
+        frequency:  { type: string }
+        duration:   { type: string, nullable: true }
+        notes:      { type: string, nullable: true }
+
+    Pagination:
+      type: object
+      required: [total, page, limit, pages, hasNext, hasPrev]
+      properties:
+        total:   { type: integer }
+        page:    { type: integer }
+        limit:   { type: integer }
+        pages:   { type: integer }
+        hasNext: { type: boolean }
+        hasPrev: { type: boolean }
+
+    PaperworkField:
+      type: object
+      required: [fieldName, fieldType, label]
+      properties:
+        fieldName: { type: string }
+        fieldType: { type: string, enum: [text, date, checkbox, select] }
+        label:     { type: string }
+        value:     { type: string, nullable: true }
+
+# ─── Paths ────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── System ──────────────────────────────────────────────────────────────────
+
+  /api/health:
+    get:
+      tags: [system]
+      summary: Health + config readiness check
+      description: |
+        Always returns HTTP 200. The `status` field is `"ok"` when all required
+        env vars are present, or `"misconfigured"` when some are missing.
+        Railway uses this endpoint for its health check probe.
+      responses:
+        "200":
+          description: Service status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:    { type: string, enum: [ok, misconfigured] }
+                  service:   { type: string }
+                  timestamp: { type: string, format: date-time }
+                  version:   { type: string }
+                  config:
+                    type: object
+                    properties:
+                      auth:              { type: boolean }
+                      storage:           { type: boolean }
+                      ai_summarization:  { type: boolean }
+                      ai_rag:            { type: boolean }
+                      ai_tts:            { type: boolean }
+                      webhook:           { type: boolean }
+
+  # ── Auth ────────────────────────────────────────────────────────────────────
+
+  /api/auth/register:
+    post:
+      tags: [auth]
+      summary: Create a patient account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string, minLength: 8, description: "Must contain uppercase letter and digit" }
+                name:     { type: string, minLength: 1, maxLength: 100 }
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    properties:
+                      patient: { $ref: '#/components/schemas/Patient' }
+                      token:   { type: string, description: "7-day JWT" }
+        "400": { description: Validation error }
+        "409": { description: Email already registered }
+        "429": { description: Rate limited (10 req/min/IP) }
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Authenticate and receive a JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    properties:
+                      patient: { $ref: '#/components/schemas/Patient' }
+                      token:   { type: string }
+        "401": { description: Invalid credentials }
+        "429": { description: Rate limited }
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke the current JWT
+      description: |
+        Adds the token to the in-process denylist. Clients MUST also discard
+        the token locally. The denylist does not survive container restarts.
+      security:
+        - bearerAuth: []
+      responses:
+        "200": { description: Token revoked }
+        "401": { description: No valid token provided }
+
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: Current patient profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Patient profile (no password hash)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:    { $ref: '#/components/schemas/Patient' }
+        "401": { description: Unauthorized }
+
+  # ── User profile ──────────────────────────────────────────────────────────
+
+  /api/user/profile:
+    get:
+      tags: [auth]
+      summary: Fetch patient profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Patient profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:    { $ref: '#/components/schemas/Patient' }
+    patch:
+      tags: [auth]
+      summary: Update name or date of birth
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:        { type: string, minLength: 1, maxLength: 100 }
+                dateOfBirth: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+      responses:
+        "200": { description: Updated profile }
+
+  # ── Appointments ──────────────────────────────────────────────────────────
+
+  /api/appointments:
+    get:
+      tags: [appointments]
+      summary: List appointments (paginated)
+      description: Returns appointments sorted by date desc. rawTranscript is never included.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Paginated appointment list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    properties:
+                      items:      { type: array, items: { $ref: '#/components/schemas/Appointment' } }
+                      pagination: { $ref: '#/components/schemas/Pagination' }
+    post:
+      tags: [appointments]
+      summary: Create an appointment manually
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:         { type: string, minLength: 1, maxLength: 200 }
+                doctorName:    { type: string, maxLength: 100 }
+                specialty:     { type: string, maxLength: 100 }
+                notes:         { type: string, maxLength: 10000 }
+                date:          { type: string, format: date-time }
+                rawTranscript: { type: string, maxLength: 100000 }
+      responses:
+        "201": { description: Appointment created }
+
+  /api/appointments/{id}:
+    get:
+      tags: [appointments]
+      summary: Fetch a single appointment
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Appointment (no rawTranscript)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:    { $ref: '#/components/schemas/Appointment' }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden — not your appointment }
+        "404": { description: Not found }
+    patch:
+      tags: [appointments]
+      summary: Update appointment fields
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:      { type: string, minLength: 1, maxLength: 200 }
+                doctorName: { type: string, maxLength: 100 }
+                specialty:  { type: string, maxLength: 100 }
+                notes:      { type: string, maxLength: 10000 }
+                date:       { type: string, format: date-time }
+      responses:
+        "200": { description: Updated appointment }
+    delete:
+      tags: [appointments]
+      summary: Soft-delete an appointment
+      description: Sets status to "deleted". S3 artifacts are not immediately removed.
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Appointment deleted }
+
+  /api/appointments/{id}/transcript:
+    post:
+      tags: [files]
+      summary: Upload raw transcript text
+      description: |
+        Stores the transcript in S3 and sets appointment status to "pending".
+        Follow with POST /summarize to trigger AI processing.
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transcript]
+              properties:
+                transcript:
+                  type: string
+                  minLength: 10
+                  maxLength: 100000
+      responses:
+        "200": { description: Transcript uploaded }
+    get:
+      tags: [files]
+      summary: Get presigned URL to download transcript
+      description: Returns a 5-minute presigned S3 URL for the raw transcript.
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Presigned download URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    properties:
+                      url:              { type: string, format: uri }
+                      expiresInSeconds: { type: integer }
+                      sizeBytes:        { type: integer, nullable: true }
+        "404": { description: No transcript available }
+
+  /api/appointments/{id}/summary:
+    get:
+      tags: [files]
+      summary: Get presigned URL to download summary JSON
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Presigned download URL for structured summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    properties:
+                      url:              { type: string, format: uri }
+                      expiresInSeconds: { type: integer }
+                      sizeBytes:        { type: integer, nullable: true }
+                      generatedAt:      { type: string, format: date-time, nullable: true }
+                      model:            { type: string, nullable: true }
+        "404": { description: No summary available }
+
+  /api/appointments/{id}/summarize:
+    post:
+      tags: [ai]
+      summary: Trigger AI summarization
+      description: |
+        Runs Perplexity summarization + Gemini RAG indexing synchronously.
+        Requires a transcript to already be stored. Call /transcript first.
+        Also useful for reprocessing after a failed background run.
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Appointment summarized }
+        "422": { description: No transcript available }
+
+  # ── AI ──────────────────────────────────────────────────────────────────────
+
+  /api/chat:
+    post:
+      tags: [ai]
+      summary: RAG-powered Q&A over appointment history
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                history:
+                  type: array
+                  maxItems: 20
+                  items:
+                    type: object
+                    required: [role, content]
+                    properties:
+                      role:    { type: string, enum: [user, assistant] }
+                      content: { type: string, maxLength: 2000 }
+      responses:
+        "200":
+          description: AI-generated answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    properties:
+                      answer:  { type: string }
+                      sources: { type: array, items: { type: string } }
+        "429": { description: Rate limited (120 req/min/user) }
+
+  /api/voice:
+    post:
+      tags: [ai]
+      summary: Text-to-speech (ElevenLabs)
+      description: Returns MP3 audio bytes. Audio is streamed and NOT stored in S3.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:    { type: string, minLength: 1, maxLength: 5000 }
+                voiceId: { type: string, pattern: '^[a-zA-Z0-9]{1,50}$' }
+      responses:
+        "200":
+          description: MP3 audio bytes
+          content:
+            audio/mpeg:
+              schema: { type: string, format: binary }
+        "429": { description: Rate limited }
+
+  /api/paperwork:
+    post:
+      tags: [ai]
+      summary: Auto-fill a medical form using patient history
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [formType]
+              properties:
+                formType:
+                  type: string
+                  enum: [intake, prescription, referral, insurance]
+                appointmentId:
+                  type: string
+                  format: uuid
+                  description: If supplied, must belong to the authenticated patient.
+      responses:
+        "200":
+          description: Filled form fields
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    properties:
+                      formType:    { type: string }
+                      fields:      { type: array, items: { $ref: '#/components/schemas/PaperworkField' } }
+                      generatedAt: { type: string, format: date-time }
+        "429": { description: Rate limited }
+
+  # ── Webhook ──────────────────────────────────────────────────────────────────
+
+  /api/webhook/omi:
+    post:
+      tags: [webhook]
+      summary: Receive OMI wearable transcript
+      description: |
+        Verified via HMAC-SHA256 `X-OMI-Signature` header (not Bearer JWT).
+        Idempotent — duplicate `session_id` payloads return the existing appointment.
+        Returns 202 immediately; AI processing runs in the background via `after()`.
+      parameters:
+        - name: X-OMI-Signature
+          in: header
+          required: true
+          schema: { type: string, example: "sha256=abc123..." }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, transcript, started_at, finished_at]
+              properties:
+                session_id:  { type: string }
+                patient_id:  { type: string }
+                started_at:  { type: string, format: date-time }
+                finished_at: { type: string, format: date-time }
+                transcript:
+                  type: array
+                  items:
+                    type: object
+                    required: [text, speaker, speaker_id, is_user, start, end]
+                    properties:
+                      text:       { type: string }
+                      speaker:    { type: string }
+                      speaker_id: { type: integer }
+                      is_user:    { type: boolean }
+                      start:      { type: number }
+                      end:        { type: number }
+      responses:
+        "202": { description: Webhook accepted — processing queued }
+        "200": { description: Duplicate session — returning existing appointment }
+        "400": { description: Malformed payload }
+        "401": { description: Invalid signature }
