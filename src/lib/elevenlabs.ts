@@ -97,35 +97,3 @@ export async function textToSpeech(
   );
 }
 
-// ─── Voice listing ────────────────────────────────────────────────────────────
-
-/**
- * Fetch available voices from ElevenLabs.
- * This is a management/debug endpoint — not used in the patient-facing flow.
- */
-export async function listVoices(): Promise<
-  { voice_id: string; name: string; category: string }[]
-> {
-  const { ELEVENLABS_API_KEY } = getEnv();
-
-  const response = await fetch(`${ELEVENLABS_API_URL}/voices`, {
-    headers: { "xi-api-key": ELEVENLABS_API_KEY },
-    signal: makeTimeoutSignal(15_000),
-  });
-
-  if (!response.ok) {
-    const { code, isRetryable } = classifyHttpStatus(response.status);
-    throw new ExternalApiError(
-      `ElevenLabs voices endpoint returned HTTP ${response.status}`,
-      code,
-      PROVIDER,
-      response.status,
-      isRetryable,
-    );
-  }
-
-  const data = (await response.json()) as {
-    voices: { voice_id: string; name: string; category: string }[];
-  };
-  return data.voices;
-}

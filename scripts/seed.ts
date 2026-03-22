@@ -31,7 +31,7 @@
 // In production (Railway) the env vars are injected directly.
 import "dotenv/config";
 
-import { createUser, getUserByEmail } from "../src/lib/users";
+import { createUser, getUserByEmail, updateUserProfile } from "../src/lib/users";
 import { createAppointment, updateAppointment } from "../src/lib/appointments";
 import { buildS3Key, uploadToS3 } from "../src/lib/s3";
 
@@ -191,9 +191,7 @@ async function main() {
     log(`Creating demo user: ${DEMO_EMAIL}`);
     const patient = await createUser(DEMO_EMAIL, DEMO_PASSWORD, DEMO_NAME);
 
-    // Update profile with date of birth (createUser doesn't accept it directly)
-    // We import updateUserProfile from users.ts
-    const { updateUserProfile } = await import("../src/lib/users");
+    // Persist the date of birth — createUser doesn't accept it directly.
     await updateUserProfile(patient.id, { dateOfBirth: DEMO_DOB });
 
     demoUserId = patient.id;
