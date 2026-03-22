@@ -13,8 +13,10 @@ import {
   successResponse,
   errorResponse,
   rateLimitResponse,
+  toSafeAppointment,
 } from "@/lib/api-helpers";
 import type { JWTPayload } from "@/lib/auth";
+import type { Appointment } from "@/types";
 
 const SAMPLE_USER: Omit<JWTPayload, "iat" | "exp"> = {
   sub: "patient-abc",
@@ -138,6 +140,59 @@ describe("errorResponse", () => {
   it("uses the supplied status code", async () => {
     const response = errorResponse("Not found", 404);
     expect(response.status).toBe(404);
+  });
+});
+
+// ─── toSafeAppointment ────────────────────────────────────────────────────────
+
+const BASE_APPOINTMENT: Appointment = {
+  id: "appt-1",
+  patientId: "patient-1",
+  title: "General Checkup",
+  date: "2025-01-15T10:00:00.000Z",
+  status: "summarized",
+  keyPoints: [],
+  prescriptions: [],
+  followUps: [],
+  createdAt: "2025-01-15T10:00:00.000Z",
+  updatedAt: "2025-01-15T10:00:00.000Z",
+};
+
+describe("toSafeAppointment", () => {
+  it("strips rawTranscript from the returned view", () => {
+    const appt: Appointment = {
+      ...BASE_APPOINTMENT,
+      rawTranscript: "Doctor: Hello. Patient: Hi.",
+    };
+    const safe = toSafeAppointment(appt);
+    expect((safe as Record<string, unknown>).rawTranscript).toBeUndefined();
+  });
+
+  it("sets hasTranscript=true when rawTranscript is present", () => {
+    const appt: Appointment = {
+      ...BASE_APPOINTMENT,
+      rawTranscript: "Doctor: Hello.",
+    };
+    expect(toSafeAppointment(appt).hasTranscript).toBe(true);
+  });
+
+  it("sets hasTranscript=true when transcriptS3Key is present (no inline text)", () => {
+    const appt: Appointment = {
+      ...BASE_APPOINTMENT,
+      transcriptS3Key: "development/patients/p1/transcripts/appt1_transcript.txt",
+    };
+    expect(toSafeAppointment(appt).hasTranscript).toBe(true);
+  });
+
+  it("sets hasTranscript=false when neither rawTranscript nor transcriptS3Key are present", () => {
+    expect(toSafeAppointment(BASE_APPOINTMENT).hasTranscript).toBe(false);
+  });
+
+  it("preserves all other fields unchanged", () => {
+    const safe = toSafeAppointment(BASE_APPOINTMENT);
+    expect(safe.id).toBe(BASE_APPOINTMENT.id);
+    expect(safe.title).toBe(BASE_APPOINTMENT.title);
+    expect(safe.status).toBe(BASE_APPOINTMENT.status);
   });
 });
 
