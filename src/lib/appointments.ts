@@ -40,6 +40,61 @@ function appointmentIndexKey(patientId: string): string {
   return buildS3Key(patientId, "appointments", "index.json");
 }
 
+/**
+ * Per-patient session index: maps OMI session_id → appointmentId.
+ * Used for webhook idempotency — prevents duplicate appointments when OMI
+ * retries a delivery that was already processed.
+ */
+function sessionIndexKey(patientId: string): string {
+  return buildS3Key(patientId, "appointments", "sessions.json");
+}
+
+// ─── Session idempotency helpers ─────────────────────────────────────────────
+
+type SessionIndex = Record<string, string>; // sessionId → appointmentId
+
+async function loadSessionIndex(patientId: string): Promise<SessionIndex> {
+  try {
+    const raw = await downloadFromS3(sessionIndexKey(patientId));
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as SessionIndex;
+  } catch (err) {
+    if (err instanceof S3StorageError && err.code === "NOT_FOUND") return {};
+    throw err;
+  }
+}
+
+/**
+ * Look up an existing appointment by OMI session_id.
+ * Returns the appointmentId if a record already exists, or null if not.
+ * Call this before createAppointment to implement webhook idempotency.
+ */
+export async function findAppointmentBySessionId(
+  patientId: string,
+  sessionId: string,
+): Promise<string | null> {
+  const sessions = await loadSessionIndex(patientId);
+  return sessions[sessionId] ?? null;
+}
+
+async function recordSessionAppointment(
+  patientId: string,
+  sessionId: string,
+  appointmentId: string,
+): Promise<void> {
+  const sessions = await loadSessionIndex(patientId);
+  sessions[sessionId] = appointmentId;
+  await uploadToS3(
+    sessionIndexKey(patientId),
+    JSON.stringify(sessions),
+    "application/json",
+    { category: "appointments", patientId },
+  );
+}
+
 // ─── Index helpers ────────────────────────────────────────────────────────────
 
 async function loadAppointmentIndex(patientId: string): Promise<string[]> {
@@ -78,6 +133,12 @@ async function appendToIndex(
 export async function createAppointment(
   patientId: string,
   data: Partial<AppointmentCreateInput>,
+  /**
+   * Optional OMI session_id. When provided the session → appointment mapping
+   * is persisted so subsequent duplicate webhook deliveries can be detected
+   * and skipped via findAppointmentBySessionId().
+   */
+  sessionId?: string,
 ): Promise<Appointment> {
   const id = uuidv4();
   const now = new Date().toISOString();
@@ -101,6 +162,12 @@ export async function createAppointment(
     embeddingS3Key: undefined,
     transcriptSizeBytes: undefined,
     summarySizeBytes: undefined,
+    sessionId,
+    processingStartedAt: undefined,
+    processingCompletedAt: undefined,
+    processingFailedAt: undefined,
+    processingError: undefined,
+    processingModel: undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -113,6 +180,13 @@ export async function createAppointment(
     { category: "appointments", patientId },
   );
   await appendToIndex(patientId, id);
+
+  // Persist session → appointment mapping after the record is safely written,
+  // so a failure here doesn't leave a dangling session entry pointing at a
+  // missing appointment.
+  if (sessionId) {
+    await recordSessionAppointment(patientId, sessionId, id);
+  }
 
   return appointment;
 }
