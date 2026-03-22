@@ -217,7 +217,9 @@ Vercel frontend integration guide including fetch patterns and token handling.
 3. In **Settings → Variables**, add every variable from `.env.example`, including:
    - `FRONTEND_URL=https://your-frontend.vercel.app` (required for CORS)
 4. Railway auto-detects the `Dockerfile` and builds a production image.
-5. Confirm the deploy succeeds by checking `https://your-app.railway.app/api/health`.
+5. Under **Networking → Public**, if Railway asks for a listening port while generating a domain, enter **`3000`**.
+   - Source of truth: `Dockerfile` sets `EXPOSE 3000` and `ENV PORT=3000`.
+6. Confirm the deploy succeeds by checking `https://your-app.railway.app/api/health`.
 
 ### Health check response
 
@@ -245,6 +247,7 @@ If `status` is `"misconfigured"`, check which `config` booleans are `false` and 
 | Setting | Value | Why |
 |---------|-------|-----|
 | Builder | `DOCKERFILE` | Multi-stage build; standalone Next.js output |
+| Public Networking port | `3000` | App listens on `PORT` (default `3000` in `Dockerfile`) |
 | Health check | `/api/health` | Confirms app + env config before routing traffic |
 | Health timeout | 300 s | Next.js standalone server needs time to warm up |
 | Restart policy | `ON_FAILURE` (max 3) | Recover from crashes; stop looping on misconfiguration |
