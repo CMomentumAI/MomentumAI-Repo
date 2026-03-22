@@ -1,20 +1,25 @@
 /**
  * POST /api/appointments/[id]/summarize
  *
- * (Re-)trigger Perplexity summarization and Gemini RAG indexing
- * for a specific appointment. Useful when a transcript is added manually
- * or when the initial background processing failed.
+ * (Re-)trigger AI summarization and Gemini RAG indexing for an appointment.
+ * Useful when:
+ *  - A transcript was uploaded manually via /transcript
+ *  - The initial webhook-triggered background processing failed (status="error")
+ *  - The appointment was left in status="pending" after a Railway restart
  *
- * Summary artifacts are stored in S3 (not on local disk) because Railway's
+ * This route runs the pipeline synchronously and waits for it to complete
+ * before responding, so the caller immediately receives the updated appointment.
+ * The shared processAppointment() helper ensures identical semantics to the
+ * webhook's after() path.
+ *
+ * Summary artifacts are stored in S3 (not local disk) because Railway's
  * container filesystem is ephemeral — files written at runtime are lost on
  * every redeploy or restart.
  */
 
 import { NextRequest } from "next/server";
-import { buildS3Key, uploadToS3 } from "@/lib/s3";
-import { summarizeAppointmentTranscript } from "@/lib/perplexity";
-import { indexAppointment } from "@/lib/gemini";
-import { getAppointment, updateAppointment } from "@/lib/appointments";
+import { getAppointment } from "@/lib/appointments";
+import { processAppointment } from "@/lib/ai-pipeline";
 import {
   requireAuth,
   requireOwnership,
@@ -49,63 +54,35 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       );
     }
 
-    await updateAppointment(user.sub, id, { status: "pending" });
-
-    const summaryData = await summarizeAppointmentTranscript(transcript);
-
-    const summaryPayload = JSON.stringify(summaryData, null, 2);
-    const summarySizeBytes = Buffer.byteLength(summaryPayload, "utf-8");
-
-    const summaryKey = buildS3Key(
-      user.sub,
-      "summaries",
-      `${id}_summary.json`,
-    );
-    // Store with category validation to enforce the 256 KB limit.
-    await uploadToS3(summaryKey, summaryPayload, "application/json", {
-      category: "summaries",
+    // Run the full summarize → store → index pipeline synchronously.
+    // processAppointment writes processingStartedAt before the AI calls and
+    // updates status + processingCompletedAt (or processingFailedAt) on completion.
+    await processAppointment({
       patientId: user.sub,
+      appointmentId: id,
+      transcript,
+      requestId,
     });
 
-    const indexText = `${summaryData.summary}\n\n${transcript}`;
-    await indexAppointment(user.sub, id, indexText);
+    // Re-fetch the appointment to get the latest state written by processAppointment.
+    const updated = await getAppointment(user.sub, id);
 
-    const updated = await updateAppointment(user.sub, id, {
-      summary: summaryData.summary,
-      keyPoints: summaryData.keyPoints,
-      prescriptions: summaryData.prescriptions,
-      followUps: summaryData.followUps,
-      summaryS3Key: summaryKey,
-      summarySizeBytes,
-      embeddingS3Key: buildS3Key(user.sub, "embeddings", "embedding_index.json"),
-      status: "summarized",
-    });
-
-    logger.info("appointments/:id:summarize", "Appointment summarized", {
+    logger.info("appointments/:id:summarize", "Summarization complete", {
       requestId,
       userId: user.sub,
       appointmentId: id,
-      summaryBytes: summarySizeBytes,
     });
 
     return successResponse(updated, "Appointment summarized successfully");
   } catch (error) {
+    // processAppointment already updated status to "error" and logged the
+    // failure — we just need to return an appropriate HTTP error here.
     logger.error(
       "appointments/:id:summarize",
-      "Summarization failed",
+      "Summarization request failed",
       error,
       { requestId, userId: user.sub, appointmentId: id },
     );
-
-    await updateAppointment(user.sub, id, { status: "error" }).catch((e) =>
-      logger.error(
-        "appointments/:id:summarize",
-        "Failed to mark appointment as error",
-        e,
-        { requestId, appointmentId: id },
-      ),
-    );
-
     return errorResponse("Failed to summarize appointment", 500);
   }
 }
