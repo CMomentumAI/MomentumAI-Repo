@@ -72,10 +72,20 @@ function makePayload(patientId: string, sessionId = "session-001") {
   });
 }
 
-function makeRequest(body: string, sig?: string): Request {
+function makeRealtimePayload(sessionId = "session-rt-001") {
+  return JSON.stringify({
+    session_id: sessionId,
+    segments: [
+      { text: "I have a headache today", speaker: "SPEAKER_00", speaker_id: 0, is_user: true, start: 0, end: 2 },
+      { text: "How long has it been going on?", speaker: "SPEAKER_01", speaker_id: 1, is_user: false, start: 2, end: 5 },
+    ],
+  });
+}
+
+function makeRequest(body: string, sig?: string, url = "http://localhost/api/webhook/omi"): Request {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (sig !== undefined) headers["X-OMI-Signature"] = sig;
-  return new Request("http://localhost/api/webhook/omi", {
+  return new Request(url, {
     method: "POST",
     headers,
     body,
@@ -131,6 +141,23 @@ describe("POST /api/webhook/omi", () => {
     });
     const res = await webhookPost(makeRequest(raw, sign(raw)) as any);
     expect(res.status).toBe(400);
+  });
+
+  it("accepts real-time transcript payloads with segments and uid query param", async () => {
+    const body = makeRealtimePayload("session-rt-uid");
+    const res = await webhookPost(
+      makeRequest(
+        body,
+        sign(body),
+        "http://localhost/api/webhook/omi?uid=omi-user-123",
+      ) as any,
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(202);
+    expect(json.success).toBe(true);
+    expect(json.data.sessionId).toBe("session-rt-uid");
+    expect(json.data.appointmentId).toBeTruthy();
   });
 
   it("is idempotent — duplicate session_id returns the existing appointment", async () => {

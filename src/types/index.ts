@@ -133,9 +133,10 @@ export interface Prescription {
 export interface OmiWebhookPayload {
   session_id: string;
   patient_id?: string;
-  transcript: OmiTranscriptSegment[];
-  started_at: string;
-  finished_at: string;
+  transcript?: OmiTranscriptSegment[];
+  segments?: OmiTranscriptSegment[];
+  started_at?: string;
+  finished_at?: string;
 }
 
 export interface OmiTranscriptSegment {
