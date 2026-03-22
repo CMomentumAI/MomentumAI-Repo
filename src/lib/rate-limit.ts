@@ -67,6 +67,11 @@ export class RateLimiter {
       if (now >= win.resetAt) this.store.delete(key);
     }
   }
+
+  /** @internal Clear all windows. Only use this in tests. */
+  reset(): void {
+    this.store.clear();
+  }
 }
 
 /**
@@ -98,4 +103,10 @@ if (typeof setInterval !== "undefined") {
     authLimiter.purgeExpired();
     apiLimiter.purgeExpired();
   }, 10 * 60 * 1000).unref?.();
+}
+
+/** @internal Reset all rate-limit windows. Only use this in tests. */
+export function _resetRateLimitersForTesting(): void {
+  authLimiter.reset();
+  apiLimiter.reset();
 }

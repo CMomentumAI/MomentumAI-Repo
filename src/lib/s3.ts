@@ -519,14 +519,3 @@ export async function getPresignedDownloadUrl(
   }
 }
 
-/**
- * @deprecated Use getPresignedDownloadUrl() instead.
- * Kept as a thin alias for backwards compatibility with callers that have not
- * been updated yet. Will be removed in a future cleanup.
- */
-export async function getPresignedUrl(
-  key: string,
-  expiresInSeconds = 300,
-): Promise<string> {
-  return getPresignedDownloadUrl(key, expiresInSeconds);
-}

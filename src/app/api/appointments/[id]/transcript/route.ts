@@ -11,7 +11,7 @@
 
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { buildS3Key, uploadToS3 } from "@/lib/s3";
+import { buildS3Key, uploadToS3, getPresignedDownloadUrl } from "@/lib/s3";
 import { getAppointment, updateAppointment } from "@/lib/appointments";
 import {
   requireAuth,
@@ -19,10 +19,63 @@ import {
   successResponse,
   errorResponse,
   getRequestId,
+  toSafeAppointment,
 } from "@/lib/api-helpers";
 import { logger } from "@/lib/logger";
 
 type RouteContext = { params: Promise<{ id: string }> };
+
+/**
+ * GET /api/appointments/[id]/transcript
+ *
+ * Returns a short-lived presigned S3 download URL for the appointment's raw
+ * transcript. The URL expires after 5 minutes (300 s).
+ *
+ * Clients must use this URL to retrieve the actual transcript text — the
+ * transcript is never returned inline in appointment responses.
+ */
+export async function GET(request: NextRequest, { params }: RouteContext) {
+  const requestId = getRequestId(request);
+  const authResult = requireAuth(request);
+  if ("status" in authResult) return authResult;
+  const { user } = authResult;
+
+  const { id } = await params;
+
+  try {
+    const appointment = await getAppointment(user.sub, id);
+    if (!appointment) return errorResponse("Appointment not found", 404);
+
+    const ownership = requireOwnership(user, appointment.patientId);
+    if (ownership) return ownership;
+
+    if (!appointment.transcriptS3Key) {
+      return errorResponse("No transcript available for this appointment", 404);
+    }
+
+    const url = await getPresignedDownloadUrl(appointment.transcriptS3Key, 300);
+
+    logger.info("appointments/:id:transcript:GET", "Presigned transcript URL issued", {
+      requestId,
+      userId: user.sub,
+      appointmentId: id,
+    });
+
+    return successResponse({
+      url,
+      expiresInSeconds: 300,
+      sizeBytes: appointment.transcriptSizeBytes ?? null,
+    });
+  } catch (error) {
+    logger.error(
+      "appointments/:id:transcript:GET",
+      "Failed to generate transcript download URL",
+      error,
+      { requestId, userId: user.sub, appointmentId: id },
+    );
+    return errorResponse("Failed to generate download URL", 500);
+  }
+}
 
 const TranscriptSchema = z.object({
   transcript: z
@@ -90,7 +143,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     });
 
     return successResponse(
-      updated,
+      updated ? toSafeAppointment(updated) : null,
       "Transcript uploaded. POST to /summarize to process it.",
     );
   } catch (error) {

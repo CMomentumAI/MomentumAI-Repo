@@ -24,7 +24,9 @@ import bcrypt from "bcryptjs";
 import { buildSystemKey, uploadToS3, downloadFromS3, S3StorageError } from "./s3";
 import type { Patient } from "@/types";
 
-const SALT_ROUNDS = 13; // OWASP recommendation for healthcare data
+// 13 rounds is the OWASP recommendation for healthcare data.
+// In the test environment we use 1 round so setup runs in milliseconds.
+const SALT_ROUNDS = process.env.NODE_ENV === "test" ? 1 : 13;
 
 interface StoredUser extends Patient {
   passwordHash: string;

@@ -11,8 +11,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { textToSpeech } from "@/lib/elevenlabs";
-import { requireAuth, errorResponse, getRequestId } from "@/lib/api-helpers";
+import { requireAuth, errorResponse, rateLimitResponse, getRequestId } from "@/lib/api-helpers";
 import { logger } from "@/lib/logger";
+import { apiLimiter } from "@/lib/rate-limit";
 
 const MAX_TTS_CHARS = 5000;
 
@@ -37,6 +38,13 @@ export async function POST(request: NextRequest) {
   const authResult = requireAuth(request);
   if ("status" in authResult) return authResult;
   const { user } = authResult;
+
+  // Per-user rate limit — TTS calls are billed and potentially expensive.
+  const rl = apiLimiter.check(user.sub);
+  if (!rl.allowed) {
+    logger.warn("voice:POST", "Rate limit exceeded", { requestId, userId: user.sub });
+    return rateLimitResponse(rl.resetAt);
+  }
 
   try {
     const body = await request.json();

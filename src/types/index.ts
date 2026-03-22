@@ -28,6 +28,12 @@ export interface Appointment {
   prescriptions?: Prescription[];
   followUps?: string[];
   status: AppointmentStatus;
+  /**
+   * S3 key for a recorded session audio file (e.g. from the OMI wearable).
+   * This field is reserved for future hardware-captured recordings.
+   * It is NOT populated by the TTS voice endpoint, which streams audio
+   * on-demand and does not persist it.
+   */
   audioS3Key?: string;
   transcriptS3Key?: string;
   summaryS3Key?: string;
@@ -85,6 +91,34 @@ export type AppointmentUpdate = Omit<
   Partial<Appointment>,
   "id" | "patientId" | "createdAt"
 >;
+
+/**
+ * Appointment shape returned by list and detail API responses.
+ *
+ * `rawTranscript` is intentionally omitted — it can be up to 100 KB of PHI
+ * and must be accessed via the dedicated presigned-download endpoint
+ * (GET /api/appointments/:id/transcript).
+ *
+ * `hasTranscript` indicates whether a transcript is available for download.
+ */
+export type AppointmentSummaryView = Omit<Appointment, "rawTranscript"> & {
+  hasTranscript: boolean;
+};
+
+/**
+ * Standard wrapper for paginated list responses.
+ */
+export interface PaginatedResponse<T> {
+  items: T[];
+  pagination: {
+    total: number;
+    page: number;
+    limit: number;
+    pages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
 
 export interface Prescription {
   medication: string;
