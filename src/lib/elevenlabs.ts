@@ -1,9 +1,32 @@
 /**
  * ElevenLabs Text-to-Speech client.
+ *
+ * Only the explicitly provided `text` argument is synthesized — no chat
+ * history or other context is forwarded to ElevenLabs, preventing unintended
+ * synthesis of conversation history or PHI from previous messages.
+ *
+ * All calls include a hard timeout and automatic retry for transient failures.
  */
+
+import { getEnv } from "./env";
+import {
+  ExternalApiError,
+  classifyHttpStatus,
+  withRetry,
+  isTransientError,
+  makeTimeoutSignal,
+} from "./resilience";
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1";
 const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"; // Rachel — calm, medical-friendly
+const PROVIDER = "elevenlabs";
+
+/** Hard timeout per TTS request attempt. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface TTSOptions {
   voiceId?: string;
@@ -14,66 +37,95 @@ export interface TTSOptions {
   speakerBoost?: boolean;
 }
 
+// ─── Text-to-speech ───────────────────────────────────────────────────────────
+
 /**
- * Convert text to speech audio using ElevenLabs.
- * Returns raw MP3 audio bytes.
+ * Convert the provided `text` to MP3 audio bytes using ElevenLabs.
+ *
+ * Only `text` is sent to ElevenLabs — this function has no access to chat
+ * history, RAG context, or any other data, so there is no risk of
+ * synthesizing content the caller did not explicitly request.
+ *
+ * Retries up to 3 times on rate-limit (429) or server errors (5xx).
+ * Throws ExternalApiError with a typed code on non-retryable failures.
  */
 export async function textToSpeech(
   text: string,
   options: TTSOptions = {},
 ): Promise<Buffer> {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) throw new Error("ELEVENLABS_API_KEY is not configured");
-
-  const voiceId = options.voiceId ?? process.env.ELEVENLABS_VOICE_ID ?? DEFAULT_VOICE_ID;
+  const { ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID } = getEnv();
+  const voiceId = options.voiceId ?? ELEVENLABS_VOICE_ID ?? DEFAULT_VOICE_ID;
   const modelId = options.modelId ?? "eleven_turbo_v2";
-
   const url = `${ELEVENLABS_API_URL}/text-to-speech/${voiceId}`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "xi-api-key": apiKey,
+  return withRetry(
+    async () => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "xi-api-key": ELEVENLABS_API_KEY,
+        },
+        body: JSON.stringify({
+          text,
+          model_id: modelId,
+          voice_settings: {
+            stability: options.stability ?? 0.5,
+            similarity_boost: options.similarityBoost ?? 0.75,
+            style: options.style ?? 0.0,
+            use_speaker_boost: options.speakerBoost ?? true,
+          },
+        }),
+        signal: makeTimeoutSignal(REQUEST_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        const { code, isRetryable } = classifyHttpStatus(response.status);
+        throw new ExternalApiError(
+          `ElevenLabs API returned HTTP ${response.status}`,
+          code,
+          PROVIDER,
+          response.status,
+          isRetryable,
+        );
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      return Buffer.from(arrayBuffer);
     },
-    body: JSON.stringify({
-      text,
-      model_id: modelId,
-      voice_settings: {
-        stability: options.stability ?? 0.5,
-        similarity_boost: options.similarityBoost ?? 0.75,
-        style: options.style ?? 0.0,
-        use_speaker_boost: options.speakerBoost ?? true,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`ElevenLabs API error ${response.status}: ${errorText}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+    isTransientError,
+  );
 }
+
+// ─── Voice listing ────────────────────────────────────────────────────────────
 
 /**
  * Fetch available voices from ElevenLabs.
+ * This is a management/debug endpoint — not used in the patient-facing flow.
  */
 export async function listVoices(): Promise<
   { voice_id: string; name: string; category: string }[]
 > {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) throw new Error("ELEVENLABS_API_KEY is not configured");
+  const { ELEVENLABS_API_KEY } = getEnv();
 
   const response = await fetch(`${ELEVENLABS_API_URL}/voices`, {
-    headers: { "xi-api-key": apiKey },
+    headers: { "xi-api-key": ELEVENLABS_API_KEY },
+    signal: makeTimeoutSignal(15_000),
   });
 
   if (!response.ok) {
-    throw new Error(`ElevenLabs voices error ${response.status}`);
+    const { code, isRetryable } = classifyHttpStatus(response.status);
+    throw new ExternalApiError(
+      `ElevenLabs voices endpoint returned HTTP ${response.status}`,
+      code,
+      PROVIDER,
+      response.status,
+      isRetryable,
+    );
   }
 
-  const data = (await response.json()) as { voices: { voice_id: string; name: string; category: string }[] };
+  const data = (await response.json()) as {
+    voices: { voice_id: string; name: string; category: string }[];
+  };
   return data.voices;
 }
