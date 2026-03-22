@@ -46,10 +46,10 @@ const envSchema = z
         "OMI_WEBHOOK_SECRET is required for webhook signature verification",
       ),
 
-    // ─── Cross-origin / CORS (Vercel frontend <-> Railway backend) ──────────────
+    // ─── Optional cross-origin / CORS ────────────────────────────────────────────
     //
     // CORS_ALLOWED_ORIGINS: comma-separated list of exact origins the browser
-    //   is permitted to call. Set in Railway for production.
+    //   is permitted to call. Leave unset for same-origin Vercel deployments.
     //   e.g. "https://momentum.vercel.app,https://momentum-pr-42.vercel.app"
     //   Local dev origins (localhost 3000/3001/5173) are always allowed and do
     //   not need to be listed here.

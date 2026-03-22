@@ -5,11 +5,11 @@
  *
  * Responsibilities:
  *
- *   1. CORS — cross-origin browser support for the Vercel frontend.
- *      The backend runs on Railway; the frontend runs on Vercel. Every
- *      browser fetch crosses an origin boundary and requires explicit CORS
- *      permission. This proxy is the single centralised place where CORS is
- *      handled so route handlers stay free of boilerplate.
+ *   1. CORS — optional cross-origin browser support.
+ *      In the recommended architecture (single Vercel-hosted Next.js app),
+ *      browser API calls are same-origin and don't need CORS. This proxy keeps
+ *      CORS handling centralized for optional external browser callers so route
+ *      handlers stay free of boilerplate.
  *
  *      • OPTIONS preflight: browser sends this before any cross-origin request
  *        that uses a custom header (e.g. Authorization). We handle it here and
@@ -21,7 +21,7 @@
  *
  *   2. Request correlation — generate or propagate X-Request-ID.
  *      Every request receives a UUID v4 that threads through the response and
- *      all log entries, enabling end-to-end tracing across Vercel and Railway.
+ *      all log entries, enabling end-to-end tracing.
  *
  * Auth is NOT enforced here. Bearer JWT auth is verified per-route by
  * requireAuth(). Keeping auth out of the Proxy means route-level checks remain

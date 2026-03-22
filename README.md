@@ -2,7 +2,7 @@
 
 **Understand every appointment. Manage prescriptions. Take control of your health journey.**
 
-Momentum is a privacy-first health intelligence backend. Patients connect their OMI wearable device to automatically capture appointment transcripts, which are summarized by AI and indexed for conversational retrieval. All data is stored in the patient's own AWS S3 bucket — no third-party health databases.
+Momentum is a privacy-first health intelligence Next.js application. The UI and backend API live in one deployable app, with route handlers under `src/app/api/**`. Patients connect their OMI wearable device to automatically capture appointment transcripts, which are summarized by AI and indexed for conversational retrieval. All data is stored in the patient's own AWS S3 bucket — no third-party health databases.
 
 ---
 
@@ -28,7 +28,7 @@ OMI Wearable ──► POST /api/webhook/omi   (HMAC-SHA256 verified)
                                         POST /api/voice (ElevenLabs)
 ```
 
-**Storage note:** Railway containers use an ephemeral local filesystem — any files written to disk at runtime are wiped on every redeploy or restart. All persistent patient data (transcripts, summaries, embeddings, audio, user records) is stored exclusively in AWS S3. Do not write persistent data to the local filesystem.
+**Storage note:** Vercel/Next.js runtimes are ephemeral. All persistent patient data (transcripts, summaries, embeddings, audio, user records) is stored exclusively in AWS S3. Do not write persistent data to the local filesystem.
 
 ---
 
@@ -72,12 +72,13 @@ All authenticated endpoints require the header: `Authorization: Bearer <token>`
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/webhook/omi` | Receive OMI device transcript (HMAC-SHA256 required) |
+| `POST` | `/api/webhooks/omi` | Alias for `/api/webhook/omi` (same behavior) |
 
 ### System
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/health` | Health + config readiness check for Railway |
+| `GET` | `/api/health` | Health + config readiness check |
 | `GET` | `/api/user/profile` | Patient profile |
 | `PATCH` | `/api/user/profile` | Update name / date of birth |
 
@@ -104,11 +105,8 @@ cp .env.example .env.local
 | `ELEVENLABS_API_KEY` | Yes | ElevenLabs API key (TTS audio) |
 | `ELEVENLABS_VOICE_ID` | No | ElevenLabs voice ID (defaults to Rachel) |
 | `OMI_WEBHOOK_SECRET` | Yes | HMAC-SHA256 secret shared with OMI cloud |
-| `CORS_ALLOWED_ORIGINS` | No\* | Comma-separated allowed origins — e.g. `https://momentum.vercel.app,https://momentum-pr-42.vercel.app`. Localhost dev ports (3000/3001/5173) are always allowed even if unset. |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated allowed origins for optional cross-origin browser callers. Leave unset for same-origin deployments. Localhost dev ports (3000/3001/5173) are always allowed. |
 | `CORS_ALLOW_CREDENTIALS` | No | `"true"` to send `Access-Control-Allow-Credentials: true` (only needed for cookie/session auth; leave `"false"` for Bearer JWT). |
-
-> **\*Required in production:** without `CORS_ALLOWED_ORIGINS`, browsers on
-> any non-localhost origin will receive a CORS error when calling the API.
 
 ---
 
@@ -202,21 +200,16 @@ Tests are fully offline — all S3 and AI provider calls are mocked.
 
 ---
 
-## Deployment (Railway + Vercel)
+## Deployment (Vercel)
 
-Momentum uses a **split deployment model**: the API backend runs on Railway and
-the frontend runs on Vercel. Both sides need to be configured for cross-origin
-browser requests to work. See `docs/frontend-integration.md` for the complete
-Vercel frontend integration guide including fetch patterns and token handling.
+Momentum is designed to deploy as a **single Next.js app** on Vercel (frontend + backend route handlers together).
 
-### Quick backend deploy (Railway)
+### Quick deploy
 
 1. Push this repository to GitHub.
-2. Create a Railway project → **New Service → GitHub Repo**.
-3. In **Settings → Variables**, add every variable from `.env.example`, including:
-   - `CORS_ALLOWED_ORIGINS=https://your-frontend.vercel.app` (required for CORS)
-4. Railway auto-detects the `Dockerfile` and builds a production image.
-5. Confirm the deploy succeeds by checking `https://your-app.railway.app/api/health`.
+2. Import the repo into Vercel.
+3. Add all required variables from `.env.example` in **Project Settings → Environment Variables**.
+4. Deploy and confirm health at `https://your-app.vercel.app/api/health`.
 
 ### Health check response
 
@@ -239,14 +232,9 @@ Vercel frontend integration guide including fetch patterns and token handling.
 
 If `status` is `"misconfigured"`, check which `config` booleans are `false` and add the corresponding env vars.
 
-### Deploy configuration (railway.toml)
+### Optional Railway deployment
 
-| Setting | Value | Why |
-|---------|-------|-----|
-| Builder | `DOCKERFILE` | Multi-stage build; standalone Next.js output |
-| Health check | `/api/health` | Confirms app + env config before routing traffic |
-| Health timeout | 300 s | Next.js standalone server needs time to warm up |
-| Restart policy | `ON_FAILURE` (max 3) | Recover from crashes; stop looping on misconfiguration |
+`railway.toml` and the Dockerfile are still present for teams that also deploy on Railway, but Vercel is the primary target architecture for this repository.
 
 ---
 
@@ -263,7 +251,7 @@ BODY='{"session_id":"test-session-001","patient_id":"<userId>","transcript":[{"t
 SIG="sha256=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')"
 
 # Send the webhook
-curl -X POST https://your-app.railway.app/api/webhook/omi \
+curl -X POST https://your-app.vercel.app/api/webhook/omi \
   -H "Content-Type: application/json" \
   -H "X-OMI-Signature: $SIG" \
   -d "$BODY"
@@ -277,19 +265,18 @@ The webhook returns `202 Accepted` immediately. Processing (summarization + RAG 
 
 ## CORS Configuration
 
-The API backend (Railway) sends correct `Access-Control-*` headers so browsers
-on the Vercel frontend can make cross-origin requests. CORS is handled centrally
-in `src/proxy.ts` using helpers from `src/lib/cors.ts` — no per-route setup
-is needed.
+For same-origin Vercel deployments, no CORS configuration is needed for app UI
+requests to `/api/**`. CORS is handled centrally in `src/proxy.ts` for optional
+cross-origin browser callers.
 
 ### Local development
 
 No configuration required. `http://localhost:3000`, `http://localhost:3001`, and
 `http://localhost:5173` are always in the allowlist.
 
-### Production (Railway)
+### Optional cross-origin production setup
 
-Set these in your Railway project's **Settings → Variables**:
+Set this if an external browser origin must call your API:
 
 ```
 CORS_ALLOWED_ORIGINS=https://momentum.vercel.app
@@ -306,9 +293,9 @@ CORS_ALLOWED_ORIGINS=https://momentum.vercel.app,https://momentum-pr-42.vercel.a
 The default auth model is **stateless Bearer JWT** — no credentials mode is
 needed and `CORS_ALLOW_CREDENTIALS` should remain `false`.
 
-If you add cookie-based auth in the future:
+If you add cookie-based auth for cross-origin callers in the future:
 
-1. Set `CORS_ALLOW_CREDENTIALS=true` in Railway.
+1. Set `CORS_ALLOW_CREDENTIALS=true`.
 2. Update the frontend fetch calls to include `credentials: "include"`.
 3. Ensure `CORS_ALLOWED_ORIGINS` is set — `*` is never used when credentials
    are enabled (the exact request origin is always echoed instead).
@@ -328,7 +315,7 @@ For the complete frontend integration guide see `docs/frontend-integration.md`.
 
 ## Logging
 
-All application logs are emitted as newline-delimited JSON to stdout/stderr. Railway's log collector captures them automatically.
+All application logs are emitted as newline-delimited JSON to stdout/stderr.
 
 Log format:
 ```json
@@ -365,7 +352,7 @@ Log format:
 | AI — Summarization | Perplexity `llama-3.1-sonar-large-128k-online` |
 | AI — RAG / Q&A | Google Gemini 1.5 Pro + `text-embedding-004` |
 | AI — Voice | ElevenLabs `eleven_turbo_v2` |
-| Deployment | Railway (Dockerfile, `output: "standalone"`) |
+| Deployment | Vercel (primary), Railway optional |
 | Testing | Vitest 4 — 155 tests, all offline |
 
 ---
@@ -373,8 +360,8 @@ Log format:
 ## Known Limitations
 
 - **Single-instance only:** The in-memory rate limiter and S3 read-then-write index pattern are not safe for multiple replicas. Scale horizontally only after migrating to a shared store (Redis, DynamoDB, or a relational DB).
-- **In-process token denylist:** `POST /api/auth/logout` revokes a token via an in-memory denylist keyed by `sub:iat`. Clients should also discard the token locally. The denylist **does not survive container restarts or Railway redeploys** — after a restart a revoked token is valid again until its 7-day TTL expires. For guaranteed revocation, replace the denylist with a Redis-backed store.
-- **Background work survives SIGTERM but not SIGKILL:** `after()` callbacks (AI pipeline) wait for graceful shutdown on Railway deploy. If the SIGKILL deadline is reached mid-summarization, the appointment stays in `status: "pending"`. Recover by calling `POST /api/appointments/:id/summarize`.
+- **In-process token denylist:** `POST /api/auth/logout` revokes a token via an in-memory denylist keyed by `sub:iat`. Clients should also discard the token locally. The denylist **does not survive runtime restarts/redeploys** — after a restart a revoked token is valid again until its 7-day TTL expires. For guaranteed revocation, replace the denylist with a Redis-backed store.
+- **Background work is best-effort:** `after()` callbacks (AI pipeline) run outside the response path. If the runtime is terminated mid-summarization, the appointment can remain `status: "pending"`. Recover by calling `POST /api/appointments/:id/summarize`.
 - **S3 key migration required on first deploy:** All keys gained a `{NODE_ENV}/` prefix. Existing data written before this change is inaccessible without a one-time S3 copy/rename.
 - **Soft-delete leaves S3 artifacts:** Deleted appointments are soft-deleted (status flag only); their S3 artifacts (transcripts, summaries, embeddings) are not removed automatically. Run `npm run cleanup` (dry-run by default, add `--delete` to execute) to purge artifacts for soft-deleted appointments. See `docs/ops.md` for scheduling guidance.
 

@@ -12,8 +12,8 @@ info:
     The webhook uses HMAC-SHA256 (`X-OMI-Signature`) instead of JWT.
 
 servers:
-  - url: https://your-app.railway.app
-    description: Production (Railway)
+  - url: https://your-app.vercel.app
+    description: Production (Vercel)
   - url: http://localhost:3000
     description: Local dev
 
