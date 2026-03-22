@@ -46,6 +46,17 @@ const envSchema = z
         "OMI_WEBHOOK_SECRET is required for webhook signature verification",
       ),
 
+    // ─── Cross-origin deployment (Vercel frontend <-> Railway backend) ──────────
+    //
+    // FRONTEND_URL: canonical Vercel origin, e.g. https://momentum.vercel.app
+    //   Set in Railway env vars so the backend knows which origin to allow.
+    //   If absent, only the hardcoded localhost dev origins are allowed.
+    //
+    // ADDITIONAL_ORIGINS: comma-separated extra origins for preview/staging.
+    //   e.g. "https://momentum-pr-42.vercel.app,https://staging.example.com"
+    FRONTEND_URL: z.string().url().optional(),
+    ADDITIONAL_ORIGINS: z.string().optional(),
+
     // ─── Runtime ──────────────────────────────────────────────────────────────
     NODE_ENV: z
       .enum(["development", "production", "test"])

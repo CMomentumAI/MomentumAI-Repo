@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **CORS / cross-origin support** for Vercel frontend → Railway backend deployment
+  - `src/lib/cors.ts`: centralised origin allowlist with `getAllowedOrigins()`, `isOriginAllowed()`, `buildCorsHeaders()`, `buildPreflightHeaders()`
+  - `src/proxy.ts`: handles `OPTIONS` preflight (returns 204), attaches `Access-Control-Allow-Origin` + `Vary: Origin` to all `/api/**` responses for allowed origins
+  - `FRONTEND_URL` env var: set in Railway to the Vercel origin (e.g. `https://momentum.vercel.app`)
+  - `ADDITIONAL_ORIGINS` env var: comma-separated list for preview/staging Vercel deployments
+  - `docs/frontend-integration.md`: complete integration contract for the Vercel frontend (auth flow, fetch patterns, audio handling, presigned URLs, local dev, production, preview deployments, security notes)
+  - 25 new CORS unit tests in `src/test/unit/cors.test.ts`
 - `POST /api/auth/logout` — revokes the caller's JWT via an in-process token denylist
 - `GET /api/appointments/:id/transcript` — returns a 5-minute presigned S3 URL for the raw transcript (replaces inline PHI in API responses)
 - `GET /api/appointments/:id/summary` — returns a presigned S3 URL for the structured summary JSON

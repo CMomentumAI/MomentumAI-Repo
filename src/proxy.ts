@@ -1,32 +1,74 @@
 /**
  * Next.js Proxy (formerly Middleware — renamed in Next.js 16).
  *
- * Runs before every matched route on the Node.js runtime.
- * Responsibilities kept deliberately minimal:
+ * Runs on the Node.js runtime before every matched /api/** route.
  *
- *   1. Generate or propagate a request correlation ID (X-Request-ID).
- *      - Honour an incoming X-Request-ID if the caller supplies one so that
- *        clients that generate their own IDs can correlate end-to-end.
- *      - Otherwise generate a new UUID v4.
- *   2. Forward the ID on the request (so route handlers can read it from
- *      request.headers.get("X-Request-ID")) and on the response (so clients
- *      and load-balancer logs can correlate requests to responses).
+ * Responsibilities:
  *
- * Auth is NOT enforced here — the app uses stateless Bearer JWTs verified
- * per-route by requireAuth(). Keeping auth out of Proxy avoids the risk of
- * accidentally bypassing a route's own checks, and keeps this file easy to
- * audit and test.
+ *   1. CORS — cross-origin browser support for the Vercel frontend.
+ *      The backend runs on Railway; the frontend runs on Vercel. Every
+ *      browser fetch crosses an origin boundary and requires explicit CORS
+ *      permission. This proxy is the single centralised place where CORS is
+ *      handled so route handlers stay free of boilerplate.
+ *
+ *      • OPTIONS preflight: browser sends this before any cross-origin request
+ *        that uses a custom header (e.g. Authorization). We handle it here and
+ *        return 204 immediately — the actual request follows separately.
+ *      • Non-preflight: attach Access-Control-Allow-Origin + Vary: Origin to
+ *        the response so the browser allows the JS code to read it.
+ *      • Disallowed origins: preflights return 403; actual requests pass through
+ *        without CORS headers (the browser will block them client-side).
+ *
+ *   2. Request correlation — generate or propagate X-Request-ID.
+ *      Every request receives a UUID v4 that threads through the response and
+ *      all log entries, enabling end-to-end tracing across Vercel and Railway.
+ *
+ * Auth is NOT enforced here. Bearer JWT auth is verified per-route by
+ * requireAuth(). Keeping auth out of the Proxy means route-level checks remain
+ * the authoritative gate and are easy to audit independently.
  */
 
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { randomUUID } from "crypto";
+import {
+  isOriginAllowed,
+  buildCorsHeaders,
+  buildPreflightHeaders,
+} from "./lib/cors";
 
 export function proxy(request: NextRequest) {
-  const requestId =
-    request.headers.get("X-Request-ID")?.trim() || randomUUID();
+  const origin = request.headers.get("Origin") ?? "";
+  const requestId = request.headers.get("X-Request-ID")?.trim() || randomUUID();
+  const originAllowed = isOriginAllowed(origin);
 
-  // Inject the ID into the upstream request headers so route handlers can log it.
+  // ── CORS preflight ───────────────────────────────────────────────────────────
+  // Browsers send OPTIONS before every cross-origin request that uses a
+  // non-simple method or a non-simple header (such as Authorization). We
+  // intercept OPTIONS here so route handlers never need to handle it.
+  if (request.method === "OPTIONS") {
+    if (originAllowed) {
+      return new NextResponse(null, {
+        status: 204,
+        headers: {
+          ...buildPreflightHeaders(origin),
+          "X-Request-ID": requestId,
+        },
+      });
+    }
+
+    // Unknown origin — deny the preflight. The browser will block the actual
+    // request too, but returning 403 here gives developers a clearer signal
+    // than a silent connection failure.
+    return new NextResponse(null, {
+      status: 403,
+      headers: { "X-Request-ID": requestId },
+    });
+  }
+
+  // ── Pass-through: attach X-Request-ID + CORS headers ────────────────────────
+  // Inject the correlation ID into the upstream request so route handlers can
+  // include it in structured log entries.
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("X-Request-ID", requestId);
 
@@ -34,8 +76,18 @@ export function proxy(request: NextRequest) {
     request: { headers: requestHeaders },
   });
 
-  // Echo the ID back to the caller for end-to-end tracing.
+  // Echo the correlation ID on the response for end-to-end tracing.
   response.headers.set("X-Request-ID", requestId);
+
+  // Attach CORS headers when the request comes from an allowed origin.
+  // Without these, the browser will block the JS code from reading the response
+  // even if the HTTP request itself succeeded on the server.
+  if (originAllowed) {
+    const corsHeaders = buildCorsHeaders(origin);
+    for (const [key, value] of Object.entries(corsHeaders)) {
+      response.headers.set(key, value);
+    }
+  }
 
   return response;
 }

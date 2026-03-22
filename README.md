@@ -104,6 +104,12 @@ cp .env.example .env.local
 | `ELEVENLABS_API_KEY` | Yes | ElevenLabs API key (TTS audio) |
 | `ELEVENLABS_VOICE_ID` | No | ElevenLabs voice ID (defaults to Rachel) |
 | `OMI_WEBHOOK_SECRET` | Yes | HMAC-SHA256 secret shared with OMI cloud |
+| `FRONTEND_URL` | No\* | Vercel frontend origin — e.g. `https://momentum.vercel.app`. Set in Railway for production; omit for local dev. |
+| `ADDITIONAL_ORIGINS` | No | Comma-separated extra allowed CORS origins for preview/staging Vercel deployments |
+
+> **\*Required in production:** without `FRONTEND_URL`, browsers on any
+> non-localhost origin will receive a CORS error when calling the API.
+> Localhost dev origins (3000, 3001, 5173) are always allowed.
 
 ---
 
@@ -197,13 +203,19 @@ Tests are fully offline — all S3 and AI provider calls are mocked.
 
 ---
 
-## Deployment (Railway)
+## Deployment (Railway + Vercel)
 
-### Quick deploy
+Momentum uses a **split deployment model**: the API backend runs on Railway and
+the frontend runs on Vercel. Both sides need to be configured for cross-origin
+browser requests to work. See `docs/frontend-integration.md` for the complete
+Vercel frontend integration guide including fetch patterns and token handling.
+
+### Quick backend deploy (Railway)
 
 1. Push this repository to GitHub.
 2. Create a Railway project → **New Service → GitHub Repo**.
-3. In **Settings → Variables**, add every variable from `.env.example`.
+3. In **Settings → Variables**, add every variable from `.env.example`, including:
+   - `FRONTEND_URL=https://your-frontend.vercel.app` (required for CORS)
 4. Railway auto-detects the `Dockerfile` and builds a production image.
 5. Confirm the deploy succeeds by checking `https://your-app.railway.app/api/health`.
 
