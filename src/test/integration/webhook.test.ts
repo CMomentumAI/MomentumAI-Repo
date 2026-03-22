@@ -2,50 +2,14 @@
  * Integration tests for the OMI webhook route.
  *
  * Coverage:
- *  POST /api/webhook/omi — valid signature (creates appointment + queues pipeline)
+ *  POST /api/webhook/omi — valid signature (accepts signal without storage)
  *  POST /api/webhook/omi — invalid signature (rejected)
- *  POST /api/webhook/omi — missing patient_id (rejected)
- *  POST /api/webhook/omi — duplicate session_id (idempotent, returns existing)
+ *  POST /api/webhook/omi — missing patient_id / uid (rejected)
+ *  POST /api/webhook/omi — duplicate session_id (accepted again)
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createHmac } from "crypto";
-
-// ─── Prevent the AI pipeline from running in tests ───────────────────────────
-
-vi.mock("@/lib/ai-pipeline", () => ({
-  processAppointment: vi.fn().mockResolvedValue(undefined),
-}));
-
-// next/server `after()` is a no-op in tests (the pipeline is already mocked).
-vi.mock("next/server", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("next/server")>();
-  return { ...actual, after: vi.fn((fn: () => Promise<void>) => fn()) };
-});
-
-// ─── In-memory S3 mock ────────────────────────────────────────────────────────
-
-const { s3Store } = vi.hoisted(() => ({ s3Store: new Map<string, string>() }));
-
-vi.mock("@/lib/s3", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/s3")>();
-  return {
-    ...actual,
-    uploadToS3: vi.fn(async (key: string, body: string | Buffer) => {
-      s3Store.set(key, Buffer.isBuffer(body) ? body.toString("utf-8") : String(body));
-      return key;
-    }),
-    downloadFromS3: vi.fn(async (key: string) => {
-      const val = s3Store.get(key);
-      if (!val) throw new actual.S3StorageError(`Not found: ${key}`, "NOT_FOUND", key);
-      return val;
-    }),
-    deleteFromS3: vi.fn(async (key: string) => { s3Store.delete(key); }),
-    getPresignedDownloadUrl: vi.fn(async (key: string) =>
-      `https://fake-s3.test/${encodeURIComponent(key)}`
-    ),
-  };
-});
 
 // ─── Route handler ────────────────────────────────────────────────────────────
 
@@ -98,7 +62,7 @@ describe("POST /api/webhook/omi", () => {
   const PATIENT_ID = "test-patient-aaaabbbbccc";
 
   beforeEach(() => {
-    s3Store.clear();
+    vi.clearAllMocks();
   });
 
   it("accepts a correctly signed payload and returns 202", async () => {
@@ -108,7 +72,7 @@ describe("POST /api/webhook/omi", () => {
 
     expect(res.status).toBe(202);
     expect(json.success).toBe(true);
-    expect(json.data.appointmentId).toBeTruthy();
+    expect(json.data.accepted).toBe(true);
     expect(json.data.sessionId).toBe("session-001");
   });
 
@@ -157,24 +121,23 @@ describe("POST /api/webhook/omi", () => {
     expect(res.status).toBe(202);
     expect(json.success).toBe(true);
     expect(json.data.sessionId).toBe("session-rt-uid");
-    expect(json.data.appointmentId).toBeTruthy();
+    expect(json.data.accepted).toBe(true);
   });
 
-  it("is idempotent — duplicate session_id returns the existing appointment", async () => {
+  it("accepts duplicate session_id deliveries without attempting storage", async () => {
     const body = makePayload(PATIENT_ID, "session-dupe");
     const sig = sign(body);
 
     const res1 = await webhookPost(makeRequest(body, sig) as any);
     const json1 = await res1.json();
     expect(res1.status).toBe(202);
-    const firstId = json1.data.appointmentId;
+    expect(json1.data.accepted).toBe(true);
 
-    // Send the same payload again
     const res2 = await webhookPost(makeRequest(body, sig) as any);
     const json2 = await res2.json();
 
-    // Second call should be idempotent — returns 200 with the same appointmentId
-    expect([200, 202]).toContain(res2.status);
-    expect(json2.data.appointmentId).toBe(firstId);
+    expect(res2.status).toBe(202);
+    expect(json2.data.accepted).toBe(true);
+    expect(json2.data.sessionId).toBe("session-dupe");
   });
 });
