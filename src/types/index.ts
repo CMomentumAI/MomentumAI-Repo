@@ -30,9 +30,58 @@ export interface Appointment {
   transcriptS3Key?: string;
   summaryS3Key?: string;
   embeddingS3Key?: string;
+  /** Byte size of the stored transcript object in S3, recorded at upload time. */
+  transcriptSizeBytes?: number;
+  /** Byte size of the stored summary object in S3, recorded at upload time. */
+  summarySizeBytes?: number;
+  // ─── AI processing metadata ─────────────────────────────────────────────────
+  /** ISO timestamp when AI summarization was last started. */
+  processingStartedAt?: string;
+  /** ISO timestamp when AI summarization last completed successfully. */
+  processingCompletedAt?: string;
+  /** ISO timestamp of the most recent summarization failure. */
+  processingFailedAt?: string;
+  /**
+   * Sanitized failure reason from the most recent summarization attempt.
+   * Capped at 500 characters. Must never contain transcript content or PHI.
+   */
+  processingError?: string;
+  /**
+   * Model/provider used for the most recent successful summarization.
+   * Example: "perplexity/llama-3.1-sonar-large-128k-online"
+   */
+  processingModel?: string;
+  /**
+   * OMI session_id that triggered this appointment via the webhook.
+   * Used to detect and reject duplicate webhook deliveries.
+   */
+  sessionId?: string;
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * Fields that callers may supply when creating a new appointment.
+ * Immutable identity fields (id, patientId, createdAt) are excluded.
+ */
+export type AppointmentCreateInput = Pick<
+  Appointment,
+  | "title"
+  | "doctorName"
+  | "specialty"
+  | "date"
+  | "rawTranscript"
+  | "status"
+>;
+
+/**
+ * Fields that callers may supply when updating an existing appointment.
+ * Identity and immutable audit fields are excluded.
+ */
+export type AppointmentUpdate = Omit<
+  Partial<Appointment>,
+  "id" | "patientId" | "createdAt"
+>;
 
 export interface Prescription {
   medication: string;
