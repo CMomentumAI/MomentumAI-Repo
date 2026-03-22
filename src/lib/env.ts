@@ -46,16 +46,23 @@ const envSchema = z
         "OMI_WEBHOOK_SECRET is required for webhook signature verification",
       ),
 
-    // ─── Cross-origin deployment (Vercel frontend <-> Railway backend) ──────────
+    // ─── Cross-origin / CORS (Vercel frontend <-> Railway backend) ──────────────
     //
-    // FRONTEND_URL: canonical Vercel origin, e.g. https://momentum.vercel.app
-    //   Set in Railway env vars so the backend knows which origin to allow.
-    //   If absent, only the hardcoded localhost dev origins are allowed.
+    // CORS_ALLOWED_ORIGINS: comma-separated list of exact origins the browser
+    //   is permitted to call. Set in Railway for production.
+    //   e.g. "https://momentum.vercel.app,https://momentum-pr-42.vercel.app"
+    //   Local dev origins (localhost 3000/3001/5173) are always allowed and do
+    //   not need to be listed here.
     //
-    // ADDITIONAL_ORIGINS: comma-separated extra origins for preview/staging.
-    //   e.g. "https://momentum-pr-42.vercel.app,https://staging.example.com"
-    FRONTEND_URL: z.string().url().optional(),
-    ADDITIONAL_ORIGINS: z.string().optional(),
+    // CORS_ALLOW_CREDENTIALS: set to "true" only when the frontend needs to send
+    //   cookies or HTTP authentication credentials alongside requests (e.g.
+    //   session-cookie auth). Leave unset or "false" for the default Bearer JWT
+    //   model which does not require credentials mode.
+    CORS_ALLOWED_ORIGINS: z.string().optional(),
+    CORS_ALLOW_CREDENTIALS: z
+      .enum(["true", "false"])
+      .optional()
+      .default("false"),
 
     // ─── Runtime ──────────────────────────────────────────────────────────────
     NODE_ENV: z

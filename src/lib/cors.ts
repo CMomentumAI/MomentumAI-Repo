@@ -7,32 +7,34 @@
  *
  * Every browser fetch from the Vercel frontend to the Railway backend crosses
  * an origin boundary. Without explicit CORS permission the browser blocks the
- * response before JavaScript can read it, regardless of whether the request
- * succeeded on the server.
+ * response before JavaScript can read it, regardless of whether the HTTP
+ * request itself succeeded on the server.
  *
- * ─── Auth model & credentials ─────────────────────────────────────────────────
- * Auth is stateless Bearer JWT. The client stores the token in memory (or
- * localStorage) and sends it as:
+ * ─── Configuration ────────────────────────────────────────────────────────────
+ * CORS_ALLOWED_ORIGINS  (optional, comma-separated)
+ *   The exact origins that are permitted to call this API from a browser.
+ *   Example: "https://momentum.vercel.app,https://momentum-pr-42.vercel.app"
+ *   Local dev origins (localhost 3000/3001/5173) are always included so
+ *   developers need no extra configuration to get started.
  *
- *   Authorization: Bearer <token>
+ * CORS_ALLOW_CREDENTIALS  (optional, "true" | "false", default "false")
+ *   When "true", sets Access-Control-Allow-Credentials: true on every CORS
+ *   response. Only needed when the frontend uses cookies or HTTP auth instead
+ *   of (or in addition to) Bearer tokens.
+ *   ⚠ When credentials are enabled, fetch() calls must use:
+ *       credentials: "include"
+ *   ⚠ Never used with wildcard origins — this implementation always echoes
+ *     the exact request origin, so it is safe to enable credentials.
  *
- * Cookies are NOT used. Therefore:
- *   • Access-Control-Allow-Credentials is NOT set (defaults to false)
- *   • fetch() calls do NOT need credentials: "include"
- *   • SameSite / Secure cookie settings are irrelevant
- *
- * ─── Origin allowlist ─────────────────────────────────────────────────────────
- * Origins are checked exactly (no wildcard patterns) to prevent unintended
- * PHI exposure to arbitrary third-party websites:
- *
- *   DEV_ORIGINS        — hardcoded local dev ports
- *   FRONTEND_URL       — Railway/production env var, the canonical Vercel URL
- *   ADDITIONAL_ORIGINS — comma-separated list for preview / staging deployments
+ * ─── Auth model ───────────────────────────────────────────────────────────────
+ * Default auth is stateless Bearer JWT.  CORS_ALLOW_CREDENTIALS defaults to
+ * "false" because Bearer tokens require no credentials mode. Set it to "true"
+ * if you add cookie-based auth in the future.
  *
  * ─── Webhook exception ────────────────────────────────────────────────────────
  * /api/webhook/omi is called server-to-server (OMI device → Railway). It
- * receives the same CORS headers as every other route (the same proxy runs on
- * all /api/**) but it is protected independently by HMAC-SHA256 signature
+ * receives the same CORS headers as every other route (the same proxy applies
+ * to all /api/**) but is protected independently by HMAC-SHA256 signature
  * verification and does not rely on CORS for security.
  */
 
@@ -40,16 +42,18 @@
 export const CORS_ALLOW_HEADERS = [
   "Content-Type",
   "Authorization",
+  "Accept",
+  "X-Requested-With",
   "X-Request-ID",
 ].join(", ");
 
 /** Methods the browser is allowed to use in cross-origin requests. */
-export const CORS_ALLOW_METHODS = "GET, POST, PATCH, DELETE, OPTIONS";
+export const CORS_ALLOW_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 
 /**
  * How long (seconds) browsers may cache a CORS preflight result.
- * 2 hours (7200 s) balances reducing preflight overhead with timely
- * config updates after an allowlist change.
+ * 2 hours balances reducing preflight overhead with timely config
+ * updates after an allowlist change.
  */
 export const CORS_MAX_AGE = "7200";
 
@@ -62,23 +66,18 @@ export const DEV_ORIGINS = [
 
 /**
  * Returns the full set of allowed origins by combining:
- *   - hardcoded dev origins (always present)
- *   - FRONTEND_URL   — the canonical production Vercel URL
- *   - ADDITIONAL_ORIGINS — comma-separated extras for preview deployments
+ *   - hardcoded dev origins (always present, regardless of NODE_ENV)
+ *   - CORS_ALLOWED_ORIGINS — comma-separated list of production / preview origins
  *
- * Reads from process.env on every call so that changes to env vars are
- * picked up without a restart in development. The overhead is a small Set
- * construction per request, which is negligible.
+ * Reads from process.env on every call so that changes to env vars are picked
+ * up without a restart in development.
  */
 export function getAllowedOrigins(): Set<string> {
   const origins = new Set<string>(DEV_ORIGINS);
 
-  const frontendUrl = process.env.FRONTEND_URL?.trim();
-  if (frontendUrl) origins.add(frontendUrl);
-
-  const extra = process.env.ADDITIONAL_ORIGINS ?? "";
-  for (const raw of extra.split(",")) {
-    const trimmed = raw.trim();
+  const raw = process.env.CORS_ALLOWED_ORIGINS ?? "";
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
     if (trimmed) origins.add(trimmed);
   }
 
@@ -86,8 +85,8 @@ export function getAllowedOrigins(): Set<string> {
 }
 
 /**
- * Returns true when the given Origin string is in the allowlist.
- * An empty string (request without an Origin header) is never allowed.
+ * Returns true when the given Origin string is in the allowed list.
+ * An empty string (no Origin header) is never allowed.
  */
 export function isOriginAllowed(origin: string): boolean {
   if (!origin) return false;
@@ -95,22 +94,37 @@ export function isOriginAllowed(origin: string): boolean {
 }
 
 /**
+ * Returns true when CORS_ALLOW_CREDENTIALS is set to "true".
+ *
+ * When true, Access-Control-Allow-Credentials: true is added to every CORS
+ * response. The frontend must also send fetch() with credentials: "include".
+ * This is only needed when the app uses cookies or HTTP authentication
+ * alongside (or instead of) Bearer tokens.
+ */
+export function isCorsCredentialsEnabled(): boolean {
+  return (process.env.CORS_ALLOW_CREDENTIALS ?? "").toLowerCase() === "true";
+}
+
+/**
  * Returns the CORS headers to attach to a normal (non-preflight) API response.
  *
- * Only called when the origin is in the allowlist, so the origin string is
- * always explicit — never "*". Using an explicit origin prevents any other
- * website from reading the response even if the browser ignored the allowlist
- * (defence in depth).
+ * The origin string is always explicit — never "*". Using an exact origin
+ * prevents any unlisted website from reading the response (defence in depth)
+ * and is required when Access-Control-Allow-Credentials is true.
  *
  * Vary: Origin tells downstream caches (CDN, reverse proxy) to store separate
- * cached entries per origin. Without it, a cache could serve a response with
- * one origin's CORS headers to a request from a different origin.
+ * cached entries per origin. Without it a cache could serve one origin's CORS
+ * headers to a request from a different origin.
  */
 export function buildCorsHeaders(origin: string): Record<string, string> {
-  return {
+  const headers: Record<string, string> = {
     "Access-Control-Allow-Origin": origin,
     Vary: "Origin",
   };
+  if (isCorsCredentialsEnabled()) {
+    headers["Access-Control-Allow-Credentials"] = "true";
+  }
+  return headers;
 }
 
 /**
@@ -118,11 +132,15 @@ export function buildCorsHeaders(origin: string): Record<string, string> {
  * Extends buildCorsHeaders with the method/header allowlists and max-age.
  */
 export function buildPreflightHeaders(origin: string): Record<string, string> {
-  return {
+  const headers: Record<string, string> = {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": CORS_ALLOW_METHODS,
     "Access-Control-Allow-Headers": CORS_ALLOW_HEADERS,
     "Access-Control-Max-Age": CORS_MAX_AGE,
     Vary: "Origin",
   };
+  if (isCorsCredentialsEnabled()) {
+    headers["Access-Control-Allow-Credentials"] = "true";
+  }
+  return headers;
 }

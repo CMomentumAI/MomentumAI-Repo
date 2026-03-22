@@ -104,12 +104,11 @@ cp .env.example .env.local
 | `ELEVENLABS_API_KEY` | Yes | ElevenLabs API key (TTS audio) |
 | `ELEVENLABS_VOICE_ID` | No | ElevenLabs voice ID (defaults to Rachel) |
 | `OMI_WEBHOOK_SECRET` | Yes | HMAC-SHA256 secret shared with OMI cloud |
-| `FRONTEND_URL` | No\* | Vercel frontend origin — e.g. `https://momentum.vercel.app`. Set in Railway for production; omit for local dev. |
-| `ADDITIONAL_ORIGINS` | No | Comma-separated extra allowed CORS origins for preview/staging Vercel deployments |
+| `CORS_ALLOWED_ORIGINS` | No\* | Comma-separated allowed origins — e.g. `https://momentum.vercel.app,https://momentum-pr-42.vercel.app`. Localhost dev ports (3000/3001/5173) are always allowed even if unset. |
+| `CORS_ALLOW_CREDENTIALS` | No | `"true"` to send `Access-Control-Allow-Credentials: true` (only needed for cookie/session auth; leave `"false"` for Bearer JWT). |
 
-> **\*Required in production:** without `FRONTEND_URL`, browsers on any
-> non-localhost origin will receive a CORS error when calling the API.
-> Localhost dev origins (3000, 3001, 5173) are always allowed.
+> **\*Required in production:** without `CORS_ALLOWED_ORIGINS`, browsers on
+> any non-localhost origin will receive a CORS error when calling the API.
 
 ---
 
@@ -215,7 +214,7 @@ Vercel frontend integration guide including fetch patterns and token handling.
 1. Push this repository to GitHub.
 2. Create a Railway project → **New Service → GitHub Repo**.
 3. In **Settings → Variables**, add every variable from `.env.example`, including:
-   - `FRONTEND_URL=https://your-frontend.vercel.app` (required for CORS)
+   - `CORS_ALLOWED_ORIGINS=https://your-frontend.vercel.app` (required for CORS)
 4. Railway auto-detects the `Dockerfile` and builds a production image.
 5. Confirm the deploy succeeds by checking `https://your-app.railway.app/api/health`.
 
@@ -273,6 +272,57 @@ curl -X POST https://your-app.railway.app/api/webhook/omi \
 The webhook returns `202 Accepted` immediately. Processing (summarization + RAG indexing) runs in the background via `after()` and completes within 30–60 seconds for typical transcripts. Check the appointment's `status` field: `pending` → `summarized` (or `error`).
 
 **Idempotency:** Duplicate `session_id` deliveries are detected using a per-patient session index in S3 and return a `200` with the existing appointment ID.
+
+---
+
+## CORS Configuration
+
+The API backend (Railway) sends correct `Access-Control-*` headers so browsers
+on the Vercel frontend can make cross-origin requests. CORS is handled centrally
+in `src/proxy.ts` using helpers from `src/lib/cors.ts` — no per-route setup
+is needed.
+
+### Local development
+
+No configuration required. `http://localhost:3000`, `http://localhost:3001`, and
+`http://localhost:5173` are always in the allowlist.
+
+### Production (Railway)
+
+Set these in your Railway project's **Settings → Variables**:
+
+```
+CORS_ALLOWED_ORIGINS=https://momentum.vercel.app
+```
+
+For multiple origins (preview deployments, staging):
+
+```
+CORS_ALLOWED_ORIGINS=https://momentum.vercel.app,https://momentum-pr-42.vercel.app
+```
+
+### Credentials (cookies/session auth)
+
+The default auth model is **stateless Bearer JWT** — no credentials mode is
+needed and `CORS_ALLOW_CREDENTIALS` should remain `false`.
+
+If you add cookie-based auth in the future:
+
+1. Set `CORS_ALLOW_CREDENTIALS=true` in Railway.
+2. Update the frontend fetch calls to include `credentials: "include"`.
+3. Ensure `CORS_ALLOWED_ORIGINS` is set — `*` is never used when credentials
+   are enabled (the exact request origin is always echoed instead).
+
+### How it works
+
+| Step | What happens |
+|------|--------------|
+| Browser sends `OPTIONS` preflight | Proxy returns 204 with `Access-Control-Allow-Origin`, methods, headers, max-age |
+| Browser sends actual request | Proxy attaches `Access-Control-Allow-Origin` + `Vary: Origin` to the response |
+| Unknown origin | Preflight returns 403; actual response has no CORS headers (browser blocks it) |
+| Error responses | Same CORS headers are attached (proxy wraps all responses, not just 2xx) |
+
+For the complete frontend integration guide see `docs/frontend-integration.md`.
 
 ---
 
