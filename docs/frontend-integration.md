@@ -293,11 +293,13 @@ protected independently by HMAC-SHA256 signature verification.
 
 ### Railway backend
 
-1. Set `FRONTEND_URL` to your production Vercel URL:
+1. Set `CORS_ALLOWED_ORIGINS` to your production Vercel URL:
    ```
-   FRONTEND_URL=https://momentum.vercel.app
+   CORS_ALLOWED_ORIGINS=https://momentum.vercel.app
    ```
-2. Verify by checking `https://your-railway-app.railway.app/api/health`:
+2. Leave `CORS_ALLOW_CREDENTIALS=false` (the default) unless you switch to
+   cookie-based auth.
+3. Verify by checking `https://your-railway-app.railway.app/api/health`:
    ```json
    { "status": "ok", "service": "Momentum", ... }
    ```
@@ -313,18 +315,18 @@ protected independently by HMAC-SHA256 signature verification.
 
 Vercel creates unique URLs for each pull request (e.g.
 `https://momentum-pr-42.vercel.app`). To allow those to call the Railway
-backend, add them to `ADDITIONAL_ORIGINS` in Railway:
+backend, add them to `CORS_ALLOWED_ORIGINS` in Railway:
 
 ```
-ADDITIONAL_ORIGINS=https://momentum-pr-42.vercel.app,https://momentum-pr-99.vercel.app
+CORS_ALLOWED_ORIGINS=https://momentum.vercel.app,https://momentum-pr-42.vercel.app,https://momentum-pr-99.vercel.app
 ```
 
 For dynamic preview URLs (where the PR number changes), you have two options:
 
 **Option A (simpler):** use a fixed Vercel preview alias and add that to
-`ADDITIONAL_ORIGINS`.
+`CORS_ALLOWED_ORIGINS`.
 
-**Option B (for CI):** set `ADDITIONAL_ORIGINS` programmatically via the
+**Option B (for CI):** update `CORS_ALLOWED_ORIGINS` programmatically via the
 Railway API each time a preview is deployed.
 
 ---
