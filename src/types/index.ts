@@ -34,6 +34,28 @@ export interface Appointment {
   transcriptSizeBytes?: number;
   /** Byte size of the stored summary object in S3, recorded at upload time. */
   summarySizeBytes?: number;
+  // ─── AI processing metadata ─────────────────────────────────────────────────
+  /** ISO timestamp when AI summarization was last started. */
+  processingStartedAt?: string;
+  /** ISO timestamp when AI summarization last completed successfully. */
+  processingCompletedAt?: string;
+  /** ISO timestamp of the most recent summarization failure. */
+  processingFailedAt?: string;
+  /**
+   * Sanitized failure reason from the most recent summarization attempt.
+   * Capped at 500 characters. Must never contain transcript content or PHI.
+   */
+  processingError?: string;
+  /**
+   * Model/provider used for the most recent successful summarization.
+   * Example: "perplexity/llama-3.1-sonar-large-128k-online"
+   */
+  processingModel?: string;
+  /**
+   * OMI session_id that triggered this appointment via the webhook.
+   * Used to detect and reject duplicate webhook deliveries.
+   */
+  sessionId?: string;
   createdAt: string;
   updatedAt: string;
 }
