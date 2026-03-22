@@ -3,9 +3,9 @@
  *
  * ─── Deployment model ─────────────────────────────────────────────────────────
  * Frontend: Vercel  (e.g. https://momentum.vercel.app)
- * Backend:  Railway (e.g. https://api.momentum.railway.app)
+ * Backend:  Cloud Run (e.g. https://momentum-api-xxxx-uc.a.run.app)
  *
- * Every browser fetch from the Vercel frontend to the Railway backend crosses
+ * Every browser fetch from the Vercel frontend to the Cloud Run backend crosses
  * an origin boundary. Without explicit CORS permission the browser blocks the
  * response before JavaScript can read it, regardless of whether the HTTP
  * request itself succeeded on the server.
@@ -32,7 +32,7 @@
  * if you add cookie-based auth in the future.
  *
  * ─── Webhook exception ────────────────────────────────────────────────────────
- * /api/webhook/omi is called server-to-server (OMI device → Railway). It
+ * /api/webhook/omi is called server-to-server (OMI device → Cloud Run). It
  * receives the same CORS headers as every other route (the same proxy applies
  * to all /api/**) but is protected independently by HMAC-SHA256 signature
  * verification and does not rely on CORS for security.

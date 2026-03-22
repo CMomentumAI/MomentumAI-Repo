@@ -18,7 +18,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
 
-# Production image
+# Production image — optimised for Cloud Run
 FROM base AS runner
 WORKDIR /app
 
@@ -30,15 +30,16 @@ RUN adduser --system --uid 1001 nextjs
 
 COPY --from=builder /app/public ./public
 
-# Automatically leverage output traces to reduce image size
+# Next.js standalone output — minimal runtime image
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 
+# Cloud Run injects PORT at runtime; 3000 is the local dev fallback.
 EXPOSE 3000
-
 ENV PORT=3000
+# 0.0.0.0 is required so Cloud Run's load balancer can reach the server.
 ENV HOSTNAME="0.0.0.0"
 
 CMD ["node", "server.js"]

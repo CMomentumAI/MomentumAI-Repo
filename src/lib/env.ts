@@ -14,17 +14,20 @@ const envSchema = z
     JWT_SECRET: z.string().min(32).optional(),
     NEXTAUTH_SECRET: z.string().min(32).optional(), // legacy fallback
 
-    // ─── AWS S3 ──────────────────────────────────────────────────────────────
-    AWS_ACCESS_KEY_ID: z
+    // ─── Google Cloud Storage ─────────────────────────────────────────────────
+    // GCS_BUCKET_NAME: the Cloud Storage bucket for all patient data.
+    // GCS_PROJECT_ID: the GCP project that owns the bucket and the service.
+    //
+    // Credentials are resolved automatically via Application Default Credentials
+    // (ADC). On Cloud Run the service account assigned to the service is used.
+    // For local dev set GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+    // or run: gcloud auth application-default login
+    GCS_BUCKET_NAME: z
       .string()
-      .min(1, "AWS_ACCESS_KEY_ID is required for S3 access"),
-    AWS_SECRET_ACCESS_KEY: z
+      .min(1, "GCS_BUCKET_NAME is required for Google Cloud Storage access"),
+    GCS_PROJECT_ID: z
       .string()
-      .min(1, "AWS_SECRET_ACCESS_KEY is required for S3 access"),
-    AWS_S3_BUCKET_NAME: z
-      .string()
-      .min(1, "AWS_S3_BUCKET_NAME is required for S3 access"),
-    AWS_REGION: z.string().min(1).default("us-east-1"),
+      .min(1, "GCS_PROJECT_ID is required for Google Cloud Storage access"),
 
     // ─── AI Services ──────────────────────────────────────────────────────────
     PERPLEXITY_API_KEY: z
@@ -46,10 +49,10 @@ const envSchema = z
         "OMI_WEBHOOK_SECRET is required for webhook signature verification",
       ),
 
-    // ─── Cross-origin / CORS (Vercel frontend <-> Railway backend) ──────────────
+    // ─── Cross-origin / CORS (Vercel frontend <-> Cloud Run backend) ────────────
     //
     // CORS_ALLOWED_ORIGINS: comma-separated list of exact origins the browser
-    //   is permitted to call. Set in Railway for production.
+    //   is permitted to call. Set in Cloud Run env for production.
     //   e.g. "https://momentum.vercel.app,https://momentum-pr-42.vercel.app"
     //   Local dev origins (localhost 3000/3001/5173) are always allowed and do
     //   not need to be listed here.

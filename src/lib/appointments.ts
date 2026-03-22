@@ -1,7 +1,7 @@
 /**
  * Appointment data store backed by AWS S3.
  *
- * WHY S3: Railway container filesystems are ephemeral — any file written to
+ * WHY S3: Cloud Run container filesystems are ephemeral — any file written to
  * disk is lost on the next redeploy or crash-restart. All appointment records
  * and their associated artifacts live exclusively in S3.
  *

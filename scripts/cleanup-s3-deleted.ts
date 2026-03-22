@@ -9,8 +9,8 @@
  *  - An accidental delete should be recoverable without data loss.
  *
  * This script performs the physical cleanup after you've confirmed the hold
- * period has elapsed. Run it periodically (e.g. a Railway cron job or a
- * manual one-off) with the required AWS env vars.
+ * period has elapsed. Run it periodically (e.g. a Cloud Scheduler job or a
+ * manual one-off) with the required GCS env vars.
  *
  * USAGE:
  *   npm run cleanup           — dry-run (no deletions)

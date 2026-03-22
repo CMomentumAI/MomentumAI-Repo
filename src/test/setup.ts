@@ -18,11 +18,11 @@ process.env.NODE_ENV = "test";
 // 32-char minimum required by the schema
 process.env.JWT_SECRET = "test-jwt-secret-32-chars-exactly!";
 
-// ─── AWS S3 ───────────────────────────────────────────────────────────────────
-process.env.AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE";
-process.env.AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-process.env.AWS_S3_BUCKET_NAME = "test-bucket";
-process.env.AWS_REGION = "us-east-1";
+// ─── Google Cloud Storage ─────────────────────────────────────────────────────
+// These are dummy values — the GCS client is mocked in tests so no real
+// Google Cloud calls are made.
+process.env.GCS_BUCKET_NAME = "test-bucket";
+process.env.GCS_PROJECT_ID = "test-project";
 
 // ─── AI services ─────────────────────────────────────────────────────────────
 process.env.PERPLEXITY_API_KEY = "pplx-test-key";

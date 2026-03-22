@@ -5,7 +5,7 @@
  *  1. Appointment transcripts/summaries are chunked into small passages.
  *  2. Each chunk is embedded with Gemini text-embedding-004.
  *  3. The embedding index is serialized to JSON and stored in S3 per patient.
- *     (S3 is used because Railway's container filesystem is ephemeral.)
+ *     (S3 is used because Cloud Run's container filesystem is ephemeral.)
  *  4. At query time the question is embedded and cosine-similarity search
  *     retrieves the top-k relevant chunks.
  *  5. The chunks are injected as context into a Gemini 1.5 Pro chat completion.

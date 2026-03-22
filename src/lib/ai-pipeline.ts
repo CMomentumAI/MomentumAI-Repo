@@ -11,11 +11,11 @@
  * The webhook calls processAppointment inside Next.js `after()`, which is the
  * framework-managed post-response hook for Node.js / Docker deployments. Unlike
  * `setImmediate`, `after()` participates in Next.js's graceful-shutdown
- * sequence — when Railway sends SIGTERM the runtime will wait for pending
+ * sequence — when Cloud Run sends SIGTERM the runtime will wait for pending
  * `after()` callbacks to settle before exiting, substantially reducing the
  * chance of lost work during deployments.
  *
- * Remaining limitation: a hard SIGKILL (sent after Railway's grace period)
+ * Remaining limitation: a hard SIGKILL (sent after Cloud Run's grace period)
  * will still interrupt in-progress work. The appointment's `status` stays
  * "pending" in this case and can be recovered by POSTing to
  * /api/appointments/[id]/summarize.

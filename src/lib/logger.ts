@@ -2,7 +2,7 @@
  * Structured server-side logger with PHI/secret redaction.
  *
  * Emits newline-delimited JSON to stdout (info/debug) and stderr (warn/error).
- * Railway's log collector captures both streams and forwards them to its
+ * Cloud Logging captures both streams automatically when running on Cloud Run.
  * log aggregator, making structured JSON queryable.
  *
  * Sensitive field names listed in REDACT_KEYS are replaced with "[REDACTED]"

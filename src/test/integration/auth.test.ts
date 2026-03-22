@@ -2,7 +2,7 @@
  * Integration tests for the auth routes.
  *
  * These tests call the actual route handler functions with real Request objects.
- * AWS S3 is replaced by an in-memory store so tests run offline.
+ * GCS is replaced by an in-memory store so tests run offline.
  *
  * Coverage:
  *  POST /api/auth/register  — success, duplicate, validation
@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-// ─── In-memory S3 mock ────────────────────────────────────────────────────────
+// ─── In-memory GCS mock ────────────────────────────────────────────────────────
 
 const { s3Store } = vi.hoisted(() => ({ s3Store: new Map<string, string>() }));
 
@@ -32,7 +32,7 @@ vi.mock("@/lib/s3", async (importOriginal) => {
     }),
     deleteFromS3: vi.fn(async (key: string) => { s3Store.delete(key); }),
     getPresignedDownloadUrl: vi.fn(async (key: string) =>
-      `https://fake-s3.test/${encodeURIComponent(key)}`
+      `https://fake-gcs.test/${encodeURIComponent(key)}`
     ),
     getObjectMetadata: vi.fn(async (key: string) =>
       s3Store.has(key) ? { contentType: "application/json" } : null

@@ -35,8 +35,8 @@ afterEach(() => {
 describe("getEnv() — valid configuration", () => {
   it("returns a validated config object when all required vars are set", () => {
     const env = getEnv();
-    expect(env.AWS_S3_BUCKET_NAME).toBe("test-bucket");
-    expect(env.AWS_REGION).toBe("us-east-1");
+    expect(env.GCS_BUCKET_NAME).toBe("test-bucket");
+    expect(env.GCS_PROJECT_ID).toBe("test-project");
     expect(env.NODE_ENV).toBe("test");
   });
 
@@ -54,20 +54,19 @@ describe("getEnv() — valid configuration", () => {
     const env = getEnv();
     expect(env.NEXTAUTH_SECRET).toBeTruthy();
   });
-
-  it("defaults AWS_REGION to us-east-1 when not set", () => {
-    delete process.env.AWS_REGION;
-    resetEnvCache();
-    const env = getEnv();
-    expect(env.AWS_REGION).toBe("us-east-1");
-  });
 });
 
 describe("getEnv() — missing or invalid vars", () => {
-  it("throws a descriptive error when AWS_S3_BUCKET_NAME is missing", () => {
-    delete process.env.AWS_S3_BUCKET_NAME;
+  it("throws a descriptive error when GCS_BUCKET_NAME is missing", () => {
+    delete process.env.GCS_BUCKET_NAME;
     resetEnvCache();
-    expect(() => getEnv()).toThrow(/AWS_S3_BUCKET_NAME/);
+    expect(() => getEnv()).toThrow(/GCS_BUCKET_NAME/);
+  });
+
+  it("throws a descriptive error when GCS_PROJECT_ID is missing", () => {
+    delete process.env.GCS_PROJECT_ID;
+    resetEnvCache();
+    expect(() => getEnv()).toThrow(/GCS_PROJECT_ID/);
   });
 
   it("throws when both JWT_SECRET and NEXTAUTH_SECRET are absent", () => {

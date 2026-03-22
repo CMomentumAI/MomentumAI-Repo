@@ -1,7 +1,7 @@
 /**
  * Patient user store backed by AWS S3.
  *
- * WHY S3: Railway container filesystems are ephemeral — files written to disk
+ * WHY S3: Cloud Run container filesystems are ephemeral — files written to disk
  * are lost on every redeploy or restart. User records (including password
  * hashes) MUST live in S3, not on disk.
  *

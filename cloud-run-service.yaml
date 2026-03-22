@@ -1,0 +1,90 @@
+# Google Cloud Run service definition for Momentum.
+#
+# Deploy with:
+#   gcloud run services replace cloud-run-service.yaml \
+#     --region=us-central1 \
+#     --project=YOUR_PROJECT_ID
+#
+# Or use the Cloud Console / Cloud Deploy pipeline.
+# See docs/gcp-deployment.md for the full deployment guide.
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: momentum-api
+  annotations:
+    # Allows unauthenticated requests (auth is handled at the app layer via JWT)
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        # Auto-scale down to 0 when idle (cost efficient for MVP)
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+        # Startup probe — wait up to 300s for the Next.js server to be ready
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      # Service account with Storage Object Admin + signBlob permissions
+      serviceAccountName: momentum-backend@YOUR_PROJECT_ID.iam.gserviceaccount.com
+      containers:
+        - image: gcr.io/YOUR_PROJECT_ID/momentum-api:latest
+          ports:
+            - containerPort: 3000
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          env:
+            # ── Storage ──────────────────────────────────────────────────────
+            - name: GCS_BUCKET_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: momentum-gcs-bucket-name
+                  key: latest
+            - name: GCS_PROJECT_ID
+              value: "YOUR_PROJECT_ID"
+            # ── Auth ─────────────────────────────────────────────────────────
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: momentum-jwt-secret
+                  key: latest
+            # ── AI services ──────────────────────────────────────────────────
+            - name: PERPLEXITY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: momentum-perplexity-key
+                  key: latest
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: momentum-gemini-key
+                  key: latest
+            - name: ELEVENLABS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: momentum-elevenlabs-key
+                  key: latest
+            # ── Webhook ──────────────────────────────────────────────────────
+            - name: OMI_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: momentum-omi-webhook-secret
+                  key: latest
+            # ── CORS ─────────────────────────────────────────────────────────
+            - name: CORS_ALLOWED_ORIGINS
+              value: "https://momentum.vercel.app"
+            - name: CORS_ALLOW_CREDENTIALS
+              value: "false"
+          # Liveness probe — Cloud Run uses the health endpoint
+          livenessProbe:
+            httpGet:
+              path: /api/health
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          startupProbe:
+            httpGet:
+              path: /api/health
+            failureThreshold: 10
+            periodSeconds: 10

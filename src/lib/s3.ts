@@ -1,13 +1,12 @@
 /**
- * AWS S3 storage utilities for the Momentum backend.
+ * Google Cloud Storage utilities for the Momentum backend.
  *
- * WHY S3 AND NOT DISK:
- * Railway runs application containers with ephemeral local filesystems.
- * Every redeploy, crash-restart, or scale event starts from a clean image,
- * wiping any files written to disk at runtime. All persistent data — patient
- * transcripts, summaries, embeddings, audio, and user records — MUST live in
- * S3. Direct disk writes in route handlers would survive only until the next
- * container restart.
+ * WHY CLOUD STORAGE AND NOT DISK:
+ * Cloud Run containers have ephemeral local filesystems. Every redeploy,
+ * crash-restart, or scale event starts from a clean image, wiping any files
+ * written to disk at runtime. All persistent data — patient transcripts,
+ * summaries, embeddings, audio, and user records — MUST live in GCS.
+ * Direct disk writes in route handlers would not survive a container restart.
  *
  * KEY STRUCTURE:
  *   Patient data:  {env}/patients/{patientId}/{category}/{filename}
@@ -16,24 +15,29 @@
  * The {env} prefix isolates development and production data within a shared
  * bucket, preventing dev test data from polluting the production namespace.
  *
- * All objects are stored with AES-256 server-side encryption.
- * All uploads include S3 user metadata (x-amz-meta-*) recording ownership,
- * category, and upload timestamp for audit purposes.
+ * ENCRYPTION:
+ * GCS encrypts all data at rest by default using AES-256 (Google-managed
+ * encryption keys). No explicit encryption flag is required on upload.
+ * Customer-managed encryption keys (CMEK) can be configured at the bucket
+ * level in the GCP console if required for compliance.
+ *
+ * CREDENTIALS:
+ *   Cloud Run:    Application Default Credentials (ADC) are used automatically.
+ *                 The Cloud Run service account must have Storage Object Admin
+ *                 and iam.serviceAccounts.signBlob (for signed URLs).
+ *   Local dev:    Set GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+ *                 or run `gcloud auth application-default login`.
+ *
+ * The exported function names, signatures, and error types are intentionally
+ * kept stable so callers (routes, services, scripts, tests) need no changes.
  */
 
-import {
-  S3Client,
-  PutObjectCommand,
-  GetObjectCommand,
-  DeleteObjectCommand,
-  ListObjectsV2Command,
-  HeadObjectCommand,
-} from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { Readable } from "stream";
+import { Storage, type File } from "@google-cloud/storage";
 import { getEnv } from "./env";
 
 // ─── Typed error ─────────────────────────────────────────────────────────────
+// Error codes are kept identical to the previous S3 implementation so that
+// all existing error-handling code continues to work without modification.
 
 export type S3ErrorCode =
   | "NOT_FOUND"
@@ -92,32 +96,34 @@ export const MAX_BYTE_SIZES: Record<S3Category, number> = {
 
 /**
  * Returns a namespace prefix based on NODE_ENV to isolate development and
- * production data within the same S3 bucket.
+ * production data within the same GCS bucket.
  */
 function envPrefix(): string {
   return process.env.NODE_ENV === "production" ? "production" : "development";
 }
 
-// ─── S3 client (lazy singleton) ──────────────────────────────────────────────
+// ─── GCS client (lazy singleton) ──────────────────────────────────────────────
 
-let _s3: S3Client | null = null;
+let _gcs: Storage | null = null;
 
-function getS3Client(): S3Client {
-  if (!_s3) {
-    const { AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY } = getEnv();
-    _s3 = new S3Client({
-      region: AWS_REGION,
-      credentials: {
-        accessKeyId: AWS_ACCESS_KEY_ID,
-        secretAccessKey: AWS_SECRET_ACCESS_KEY,
-      },
-    });
+function getGcsClient(): Storage {
+  if (!_gcs) {
+    const { GCS_PROJECT_ID } = getEnv();
+    // Credentials are resolved automatically via Application Default Credentials
+    // (ADC). On Cloud Run the service account is used. Locally, set
+    // GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default login`.
+    _gcs = new Storage({ projectId: GCS_PROJECT_ID });
   }
-  return _s3;
+  return _gcs;
 }
 
-function getBucket(): string {
-  return getEnv().AWS_S3_BUCKET_NAME;
+function getGcsBucket() {
+  return getGcsClient().bucket(getEnv().GCS_BUCKET_NAME);
+}
+
+/** Convenience helper to get a File reference without making a network call. */
+function getFile(key: string): File {
+  return getGcsBucket().file(key);
 }
 
 // ─── Key component validation ─────────────────────────────────────────────────
@@ -125,7 +131,7 @@ function getBucket(): string {
 /**
  * Validate an ID component (UUID, user ID, etc.).
  * Permits alphanumeric characters and hyphens only, which covers all UUIDs
- * and prevents path traversal or injection into S3 key paths.
+ * and prevents path traversal or injection into GCS object names.
  */
 function validateIdComponent(value: string, field: string): void {
   if (!value || typeof value !== "string") {
@@ -177,7 +183,7 @@ function validateFilenameComponent(value: string, field: string): void {
 // ─── Key builders ─────────────────────────────────────────────────────────────
 
 /**
- * Build a scoped, validated S3 key for patient-owned data.
+ * Build a scoped, validated GCS object name for patient-owned data.
  *
  * Structure: {env}/patients/{patientId}/{category}/{filename}
  *
@@ -195,11 +201,11 @@ export function buildS3Key(
 }
 
 /**
- * Build a system-level S3 key for non-patient data (user records, indexes).
+ * Build a system-level GCS object name for non-patient data (user records, indexes).
  *
  * Structure: {env}/system/{subpath}
  *
- * The subpath may contain forward slashes (treated as S3 "directory"
+ * The subpath may contain forward slashes (treated as GCS "directory"
  * separators) but must not contain path traversal sequences.
  */
 export function buildSystemKey(subpath: string): string {
@@ -249,12 +255,13 @@ export function validateByteSize(
 
 // ─── Error classification helper ──────────────────────────────────────────────
 
+/** GCS returns HTTP 404 as a numeric error code when objects don't exist. */
 function isNotFound(err: unknown): boolean {
-  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+  const e = err as { code?: number | string; message?: string };
   return (
-    e.name === "NoSuchKey" ||
-    e.name === "NotFound" ||
-    e.$metadata?.httpStatusCode === 404
+    e.code === 404 ||
+    e.code === "404" ||
+    (typeof e.message === "string" && e.message.includes("No such object"))
   );
 }
 
@@ -263,22 +270,25 @@ function isNotFound(err: unknown): boolean {
 export interface UploadOptions {
   /** Storage category — enables content-type and byte-size validation. */
   category?: S3Category;
-  /** Owning patient ID — stored as S3 object metadata for audit purposes. */
+  /** Owning patient ID — stored as GCS object metadata for audit purposes. */
   patientId?: string;
 }
 
 /**
- * Upload an object to S3 with AES-256 server-side encryption.
+ * Upload an object to GCS.
+ *
+ * GCS encrypts all data at rest with AES-256 by default — no explicit
+ * encryption parameter is required.
  *
  * When `options.category` is provided:
  *   - content-type is validated against the category's allowlist
  *   - byte size is validated against the category's limit
  *
- * S3 user metadata records patientId, category, and upload timestamp so that
- * object ownership can be confirmed via a HEAD request without downloading the
- * full body.
+ * Custom metadata records patientId, category, and upload timestamp so that
+ * object ownership can be confirmed via a metadata request without downloading
+ * the full body.
  *
- * Returns the S3 key on success.
+ * Returns the GCS object name (key) on success.
  */
 export async function uploadToS3(
   key: string,
@@ -297,24 +307,17 @@ export async function uploadToS3(
     validateByteSize(category, byteSize);
   }
 
-  const metadata: Record<string, string> = {
+  const customMetadata: Record<string, string> = {
     "uploaded-at": new Date().toISOString(),
   };
-  if (patientId) metadata["patient-id"] = patientId;
-  if (category) metadata["category"] = category;
+  if (patientId) customMetadata["patient-id"] = patientId;
+  if (category) customMetadata["category"] = category;
 
   try {
-    await getS3Client().send(
-      new PutObjectCommand({
-        Bucket: getBucket(),
-        Key: key,
-        Body: bodyBuffer,
-        ContentType: contentType,
-        ContentLength: byteSize,
-        ServerSideEncryption: "AES256",
-        Metadata: metadata,
-      }),
-    );
+    await getFile(key).save(bodyBuffer, {
+      contentType,
+      metadata: { metadata: customMetadata },
+    });
   } catch (err) {
     throw new S3StorageError(
       `Failed to upload "${key}": ${err instanceof Error ? err.message : String(err)}`,
@@ -329,16 +332,14 @@ export async function uploadToS3(
 // ─── Download ─────────────────────────────────────────────────────────────────
 
 /**
- * Download an S3 object and decode it as a UTF-8 string.
+ * Download a GCS object and decode it as a UTF-8 string.
  * Throws S3StorageError(NOT_FOUND) when the object does not exist.
- * Throws S3StorageError(DOWNLOAD_FAILED) for all other S3 errors.
+ * Throws S3StorageError(DOWNLOAD_FAILED) for all other GCS errors.
  */
 export async function downloadFromS3(key: string): Promise<string> {
-  let response;
   try {
-    response = await getS3Client().send(
-      new GetObjectCommand({ Bucket: getBucket(), Key: key }),
-    );
+    const [contents] = await getFile(key).download();
+    return contents.toString("utf-8");
   } catch (err) {
     throw new S3StorageError(
       `Failed to download "${key}": ${err instanceof Error ? err.message : String(err)}`,
@@ -346,34 +347,17 @@ export async function downloadFromS3(key: string): Promise<string> {
       key,
     );
   }
-
-  if (!response.Body) {
-    throw new S3StorageError(
-      `S3 returned an empty body for "${key}"`,
-      "DOWNLOAD_FAILED",
-      key,
-    );
-  }
-
-  const stream = response.Body as Readable;
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf-8");
 }
 
 /**
- * Download an S3 object and return its raw bytes.
+ * Download a GCS object and return its raw bytes.
  * Use this for binary content such as MP3 audio files.
  * Throws S3StorageError(NOT_FOUND) when the object does not exist.
  */
 export async function downloadFromS3Binary(key: string): Promise<Buffer> {
-  let response;
   try {
-    response = await getS3Client().send(
-      new GetObjectCommand({ Bucket: getBucket(), Key: key }),
-    );
+    const [contents] = await getFile(key).download();
+    return contents;
   } catch (err) {
     throw new S3StorageError(
       `Failed to download binary "${key}": ${err instanceof Error ? err.message : String(err)}`,
@@ -381,21 +365,6 @@ export async function downloadFromS3Binary(key: string): Promise<Buffer> {
       key,
     );
   }
-
-  if (!response.Body) {
-    throw new S3StorageError(
-      `S3 returned an empty body for "${key}"`,
-      "DOWNLOAD_FAILED",
-      key,
-    );
-  }
-
-  const stream = response.Body as Readable;
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
 }
 
 // ─── HEAD (metadata without body) ────────────────────────────────────────────
@@ -404,33 +373,33 @@ export interface S3ObjectMeta {
   contentType?: string;
   contentLength?: number;
   lastModified?: Date;
-  /** S3 user metadata (x-amz-meta-* headers, returned without the prefix). */
+  /** GCS custom metadata fields. */
   metadata?: Record<string, string>;
 }
 
 /**
- * Fetch S3 object metadata without downloading the body.
+ * Fetch GCS object metadata without downloading the body.
  * Returns null when the object does not exist (safe to use as an existence
- * check before issuing a presigned URL).
+ * check before issuing a signed URL).
  * Throws S3StorageError(HEAD_FAILED) for non-404 errors.
  */
 export async function getObjectMetadata(
   key: string,
 ): Promise<S3ObjectMeta | null> {
   try {
-    const response = await getS3Client().send(
-      new HeadObjectCommand({ Bucket: getBucket(), Key: key }),
-    );
+    const [meta] = await getFile(key).getMetadata();
     return {
-      contentType: response.ContentType,
-      contentLength: response.ContentLength,
-      lastModified: response.LastModified,
-      metadata: response.Metadata,
+      contentType: meta.contentType as string | undefined,
+      contentLength:
+        meta.size !== undefined ? Number(meta.size) : undefined,
+      lastModified:
+        meta.updated ? new Date(meta.updated as string) : undefined,
+      metadata: meta.metadata as Record<string, string> | undefined,
     };
   } catch (err) {
     if (isNotFound(err)) return null;
     throw new S3StorageError(
-      `Failed to HEAD "${key}": ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to get metadata for "${key}": ${err instanceof Error ? err.message : String(err)}`,
       "HEAD_FAILED",
       key,
     );
@@ -440,14 +409,12 @@ export async function getObjectMetadata(
 // ─── Delete ──────────────────────────────────────────────────────────────────
 
 /**
- * Delete an S3 object.
- * S3 DeleteObject is idempotent — deleting a non-existent key succeeds silently.
+ * Delete a GCS object.
+ * GCS delete is idempotent — deleting a non-existent object succeeds silently.
  */
 export async function deleteFromS3(key: string): Promise<void> {
   try {
-    await getS3Client().send(
-      new DeleteObjectCommand({ Bucket: getBucket(), Key: key }),
-    );
+    await getFile(key).delete({ ignoreNotFound: true });
   } catch (err) {
     throw new S3StorageError(
       `Failed to delete "${key}": ${err instanceof Error ? err.message : String(err)}`,
@@ -460,17 +427,13 @@ export async function deleteFromS3(key: string): Promise<void> {
 // ─── List ─────────────────────────────────────────────────────────────────────
 
 /**
- * List all object keys under a given prefix.
+ * List all object names under a given prefix.
  * Returns an empty array when no objects are found (not an error).
  */
 export async function listS3Objects(prefix: string): Promise<string[]> {
   try {
-    const response = await getS3Client().send(
-      new ListObjectsV2Command({ Bucket: getBucket(), Prefix: prefix }),
-    );
-    return (response.Contents ?? [])
-      .map((obj) => obj.Key)
-      .filter((k): k is string => typeof k === "string");
+    const [files] = await getGcsBucket().getFiles({ prefix });
+    return files.map((f) => f.name).filter(Boolean);
   } catch (err) {
     throw new S3StorageError(
       `Failed to list objects under "${prefix}": ${err instanceof Error ? err.message : String(err)}`,
@@ -482,18 +445,23 @@ export async function listS3Objects(prefix: string): Promise<string[]> {
 
 // ─── Presigned download URL ───────────────────────────────────────────────────
 
-const MIN_PRESIGNED_EXPIRY_S = 60;        // 1 minute
-const MAX_PRESIGNED_EXPIRY_S = 15 * 60;  // 15 minutes
+const MIN_PRESIGNED_EXPIRY_S = 60;       // 1 minute
+const MAX_PRESIGNED_EXPIRY_S = 15 * 60; // 15 minutes
 
 /**
- * Generate a short-lived presigned URL that allows the holder to download a
- * specific S3 object without AWS credentials.
+ * Generate a short-lived signed URL that allows the holder to download a
+ * specific GCS object without Google Cloud credentials.
+ *
+ * REQUIREMENTS FOR SIGNED URLS:
+ *   Cloud Run: the service account must have the
+ *     iam.serviceAccountTokenCreator role (to sign URLs via IAM).
+ *   Local dev:  set GOOGLE_APPLICATION_CREDENTIALS to a service account
+ *     key JSON file with the roles/storage.objectViewer permission.
  *
  * OWNERSHIP NOTE: This function does NOT verify that the requested key belongs
  * to the authenticated user. Callers MUST confirm ownership before calling
  * this function — e.g. by verifying the key's patientId segment matches the
- * authenticated user's ID, or by calling getObjectMetadata() and checking the
- * x-amz-meta-patient-id header.
+ * authenticated user's ID.
  *
  * Expiry is clamped to [1 min, 15 min] regardless of what the caller passes,
  * limiting the replay window for any leaked URL.
@@ -508,14 +476,17 @@ export async function getPresignedDownloadUrl(
   );
 
   try {
-    const command = new GetObjectCommand({ Bucket: getBucket(), Key: key });
-    return getSignedUrl(getS3Client(), command, { expiresIn: expiry });
+    const [url] = await getFile(key).getSignedUrl({
+      version: "v4",
+      action: "read",
+      expires: Date.now() + expiry * 1000,
+    });
+    return url;
   } catch (err) {
     throw new S3StorageError(
-      `Failed to generate presigned URL for "${key}": ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to generate signed URL for "${key}": ${err instanceof Error ? err.message : String(err)}`,
       "HEAD_FAILED",
       key,
     );
   }
 }
-

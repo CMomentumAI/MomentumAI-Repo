@@ -133,7 +133,7 @@ export function isTransientError(err: unknown): boolean {
 /**
  * Create an AbortSignal that fires after `ms` milliseconds.
  * Pass as `signal` to `fetch()` to get a hard HTTP-level timeout.
- * Available in Node.js 17.3+ (Railway runs Node 20).
+ * Available in Node.js 17.3+ (Cloud Run uses Node 20).
  */
 export function makeTimeoutSignal(ms: number): AbortSignal {
   return AbortSignal.timeout(ms);

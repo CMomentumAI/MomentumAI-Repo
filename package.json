@@ -14,8 +14,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1014.0",
-    "@aws-sdk/s3-request-presigner": "^3.1014.0",
+    "@google-cloud/storage": "^7.19.0",
     "@google/generative-ai": "^0.24.1",
     "bcryptjs": "^3.0.3",
     "jsonwebtoken": "^9.0.3",

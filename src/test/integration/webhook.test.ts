@@ -23,7 +23,7 @@ vi.mock("next/server", async (importOriginal) => {
   return { ...actual, after: vi.fn((fn: () => Promise<void>) => fn()) };
 });
 
-// ─── In-memory S3 mock ────────────────────────────────────────────────────────
+// ─── In-memory GCS mock ────────────────────────────────────────────────────────
 
 const { s3Store } = vi.hoisted(() => ({ s3Store: new Map<string, string>() }));
 
@@ -42,7 +42,7 @@ vi.mock("@/lib/s3", async (importOriginal) => {
     }),
     deleteFromS3: vi.fn(async (key: string) => { s3Store.delete(key); }),
     getPresignedDownloadUrl: vi.fn(async (key: string) =>
-      `https://fake-s3.test/${encodeURIComponent(key)}`
+      `https://fake-gcs.test/${encodeURIComponent(key)}`
     ),
   };
 });

@@ -6,7 +6,7 @@
  *
  * LIMITATIONS (documented intentionally):
  *  - The denylist lives in the Node.js process heap. It does NOT survive
- *    a container restart or Railway redeploy. After a restart, previously
+ *    a container restart or Cloud Run redeploy. After a restart, previously
  *    logged-out tokens will be valid again until their natural expiry.
  *  - On multi-replica deployments, logout only invalidates the token on the
  *    instance that handled the request. For shared revocation, replace this

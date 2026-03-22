@@ -1,9 +1,9 @@
 /**
  * Lightweight in-memory sliding-window rate limiter.
  *
- * Suitable for single-instance Railway/Docker deployments. If the app is ever
+ * Suitable for single-instance Cloud Run deployments. If the app is ever
  * scaled to multiple replicas, replace the in-process store with a shared
- * counter backed by Redis or Railway's Valkey add-on.
+ * counter backed by Redis or a managed cache (e.g. Cloud Memorystore).
  *
  * Usage:
  *   const result = authLimiter.check(clientIp);

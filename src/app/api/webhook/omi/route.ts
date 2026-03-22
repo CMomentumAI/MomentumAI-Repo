@@ -15,8 +15,8 @@
  * `after()` (Next.js 15.1+, stable in 16) is the framework-managed hook for
  * post-response work in Node.js / Docker deployments. Unlike `setImmediate`:
  *  - Next.js participates in graceful shutdown, waiting for `after()` callbacks
- *    before exiting when Railway sends SIGTERM during a redeploy.
- *  - A hard SIGKILL (sent after Railway's grace period) can still interrupt
+ *    before exiting when Cloud Run sends SIGTERM during a redeploy.
+ *  - A hard SIGKILL (sent after Cloud Run's grace period) can still interrupt
  *    work. The appointment stays in "pending" status in that case and can be
  *    recovered via POST /api/appointments/[id]/summarize.
  *
@@ -135,7 +135,7 @@ export async function POST(request: NextRequest) {
       "transcripts",
       `${appointment.id}_transcript.txt`,
     );
-    // Store in S3 — Railway's container filesystem is ephemeral.
+    // Store in S3 — Cloud Run's container filesystem is ephemeral.
     await uploadToS3(transcriptKey, fullTranscript, "text/plain", {
       category: "transcripts",
       patientId,
@@ -157,7 +157,7 @@ export async function POST(request: NextRequest) {
     // ── Schedule AI pipeline via after() ─────────────────────────────────
     // `after()` runs after the 202 response is sent. Next.js waits for it
     // during graceful shutdown (SIGTERM), so work is preserved through
-    // Railway redeployments as long as they complete within the grace period.
+    // Cloud Run redeployments as long as they complete within the grace period.
     after(async () => {
       try {
         await processAppointment({

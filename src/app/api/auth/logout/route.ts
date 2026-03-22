@@ -6,7 +6,7 @@
  *
  * IMPORTANT LIMITATIONS (by design for this deployment model):
  *  - The denylist is in-process. It does NOT survive a container restart or
- *    Railway redeploy. After a restart, the revoked token is valid again until
+ *    Cloud Run redeploy. After a restart, the revoked token is valid again until
  *    its natural 7-day expiry.
  *  - On multi-replica deployments only the handling replica denies the token.
  *    Use a shared store (Redis / Railway Valkey) for cluster-wide revocation.

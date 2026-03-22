@@ -1,8 +1,8 @@
 /**
  * GET /api/health
  *
- * Health check endpoint consumed by Railway's load balancer and healthcheck
- * probe (configured in railway.toml). Must respond within healthcheckTimeout.
+ * Health check endpoint consumed by Cloud Run's load balancer. Cloud Run
+ * considers the service healthy when this path returns HTTP 200.
  *
  * Response shape:
  *   status      "ok" | "misconfigured"
@@ -12,8 +12,9 @@
  *   config      per-service readiness flags (boolean) — does NOT make
  *               network calls; only checks process.env presence.
  *
- * Railway restarts the container automatically if this endpoint does not
- * return HTTP 200 within the configured timeout window.
+ * Always returns HTTP 200 even when misconfigured, so Cloud Run does not
+ * restart the container over a missing env var. Operators read the `config`
+ * object to diagnose which service group is not configured.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -25,9 +26,8 @@ function checkConfig() {
   return {
     auth: !!(process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET),
     storage: !!(
-      process.env.AWS_ACCESS_KEY_ID &&
-      process.env.AWS_SECRET_ACCESS_KEY &&
-      process.env.AWS_S3_BUCKET_NAME
+      process.env.GCS_BUCKET_NAME &&
+      process.env.GCS_PROJECT_ID
     ),
     ai_summarization: !!process.env.PERPLEXITY_API_KEY,
     ai_rag: !!process.env.GEMINI_API_KEY,
@@ -50,8 +50,6 @@ export async function GET(request: NextRequest) {
       config,
     },
     {
-      // Always return 200 so Railway doesn't restart over a misconfiguration —
-      // the `status` and `config` fields tell operators what's wrong.
       status: 200,
       headers: {
         "Cache-Control": "no-store",

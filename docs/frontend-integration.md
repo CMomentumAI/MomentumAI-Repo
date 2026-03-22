@@ -1,13 +1,13 @@
 # Momentum Frontend Integration Guide
 
-**Backend:** Railway — `https://api.momentum.railway.app` (example)  
+**Backend:** Cloud Run — `https://api.momentum.railway.app` (example)  
 **Frontend:** Vercel — `https://momentum.vercel.app` (example)
 
 ---
 
 ## Overview
 
-The Momentum API backend runs on Railway; the frontend runs on Vercel. Because
+The Momentum API backend runs on Cloud Run; the frontend runs on Vercel. Because
 they are on different origins, every browser fetch from the frontend to the
 backend is a **cross-origin request**. The backend handles this through the
 CORS middleware in `src/proxy.ts`, which applies on every `/api/**` route.
@@ -19,7 +19,7 @@ CORS middleware in `src/proxy.ts`, which applies on every `/api/**` route.
 Auth is **stateless Bearer JWT**. There are no cookies.
 
 ```
-Frontend                      Railway backend
+Frontend                      Cloud Run backend
   │  POST /api/auth/login       │
   │  { email, password }        │
   │ ─────────────────────────► │
@@ -215,14 +215,14 @@ const { url } = await apiFetch<{ url: string; expiresInSeconds: number }>(
   authToken,
 );
 
-// 2. Fetch the file from S3 — this is a direct S3 URL, not the Railway API.
+// 2. Fetch the file from S3 — this is a direct S3 URL, not the Cloud Run API.
 //    No Authorization header needed (it's a pre-signed S3 URL).
 //    No CORS issues: S3 is configured to allow the download.
 const transcriptText = await fetch(url).then((r) => r.text());
 ```
 
 > **Note about S3 CORS:** The presigned URL points directly to AWS S3, not to
-> the Railway backend. If the Vercel frontend fetches it from the browser (not
+> the Cloud Run backend. If the Vercel frontend fetches it from the browser (not
 > server-side), the S3 bucket must have a CORS policy that allows the Vercel
 > origin. Configure this in the S3 bucket's CORS settings:
 >
@@ -272,7 +272,7 @@ protected independently by HMAC-SHA256 signature verification.
 
 ## Local development
 
-1. Start the Railway backend locally with `npm run dev` in the backend repo:
+1. Start the Cloud Run backend locally with `npm run dev` in the backend repo:
    ```bash
    cp .env.example .env.local  # fill in your values
    npm run dev                  # http://localhost:3000
@@ -291,7 +291,7 @@ protected independently by HMAC-SHA256 signature verification.
 
 ## Production deployment
 
-### Railway backend
+### Cloud Run backend
 
 1. Set `CORS_ALLOWED_ORIGINS` to your production Vercel URL:
    ```
@@ -306,7 +306,7 @@ protected independently by HMAC-SHA256 signature verification.
 
 ### Vercel frontend
 
-1. Set `NEXT_PUBLIC_API_URL` to your Railway backend URL:
+1. Set `NEXT_PUBLIC_API_URL` to your Cloud Run backend URL:
    ```
    NEXT_PUBLIC_API_URL=https://your-railway-app.railway.app
    ```
@@ -314,8 +314,8 @@ protected independently by HMAC-SHA256 signature verification.
 ### Vercel preview deployments
 
 Vercel creates unique URLs for each pull request (e.g.
-`https://momentum-pr-42.vercel.app`). To allow those to call the Railway
-backend, add them to `CORS_ALLOWED_ORIGINS` in Railway:
+`https://momentum-pr-42.vercel.app`). To allow those to call the Cloud Run
+backend, add them to `CORS_ALLOWED_ORIGINS` in Cloud Run:
 
 ```
 CORS_ALLOWED_ORIGINS=https://momentum.vercel.app,https://momentum-pr-42.vercel.app,https://momentum-pr-99.vercel.app
@@ -327,7 +327,7 @@ For dynamic preview URLs (where the PR number changes), you have two options:
 `CORS_ALLOWED_ORIGINS`.
 
 **Option B (for CI):** update `CORS_ALLOWED_ORIGINS` programmatically via the
-Railway API each time a preview is deployed.
+Cloud Run API each time a preview is deployed.
 
 ---
 
@@ -354,14 +354,14 @@ Railway API each time a preview is deployed.
 
 ## Request tracing
 
-Every API response from the Railway backend includes:
+Every API response from the Cloud Run backend includes:
 
 ```
 X-Request-ID: <uuid>
 ```
 
 Log this value in the frontend for support debugging. It correlates to
-structured log entries on the Railway side.
+structured log entries on the Cloud Run side.
 
 ```typescript
 const response = await fetch(`${API_URL}/api/appointments`, {
