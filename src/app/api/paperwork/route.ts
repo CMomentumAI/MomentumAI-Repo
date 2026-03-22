@@ -11,6 +11,10 @@
  *  - "prescription"  Prescription details from last appointment
  *  - "referral"      Referral letter
  *  - "insurance"     Insurance pre-authorization
+ *
+ * Context source: patient profile + up to 5 most recent summarized appointments.
+ * If appointmentId is supplied it must belong to the authenticated patient;
+ * a 404 is returned if it does not exist or has been soft-deleted.
  */
 
 import { NextRequest } from "next/server";
@@ -26,21 +30,33 @@ import {
   getRequestId,
 } from "@/lib/api-helpers";
 import { logger } from "@/lib/logger";
+import { withTimeoutPromise } from "@/lib/resilience";
 import type { PaperworkResponse } from "@/types";
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
 const FORM_TYPES = ["intake", "prescription", "referral", "insurance"] as const;
+
+/** Hard timeout for Gemini form-fill generation. */
+const GEMINI_TIMEOUT_MS = 45_000;
+
+// ─── Validation ───────────────────────────────────────────────────────────────
 
 const PaperworkSchema = z.object({
   formType: z.enum(FORM_TYPES),
   appointmentId: z.string().uuid().optional(),
 });
 
+// ─── Gemini client ────────────────────────────────────────────────────────────
+
 function getGeminiClient(): GoogleGenerativeAI {
   const { GEMINI_API_KEY } = getEnv();
   return new GoogleGenerativeAI(GEMINI_API_KEY);
 }
 
-const FORM_TEMPLATES: Record<string, string> = {
+// ─── Form templates ───────────────────────────────────────────────────────────
+
+const FORM_TEMPLATES: Record<(typeof FORM_TYPES)[number], string> = {
   intake: `Fill out a patient intake form with the following fields:
     - patientName (text)
     - dateOfBirth (date)
@@ -82,8 +98,10 @@ const FORM_TEMPLATES: Record<string, string> = {
     - treatingPhysician (text)`,
 };
 
+// ─── AI form-fill ─────────────────────────────────────────────────────────────
+
 async function autoFillForm(
-  formType: string,
+  formType: (typeof FORM_TYPES)[number],
   patientContext: string,
 ): Promise<PaperworkResponse> {
   const genAI = getGeminiClient();
@@ -108,7 +126,11 @@ ${patientContext}
 
 If information is not available, leave the value as an empty string.`;
 
-  const result = await model.generateContent(prompt);
+  const result = await withTimeoutPromise(
+    model.generateContent(prompt),
+    GEMINI_TIMEOUT_MS,
+    "gemini-paperwork",
+  );
   const content = result.response.text();
 
   const cleaned = content
@@ -116,14 +138,23 @@ If information is not available, leave the value as an empty string.`;
     .replace(/```\s*$/g, "")
     .trim();
 
-  const parsed = JSON.parse(cleaned) as { fields: PaperworkResponse["fields"] };
-
-  return {
-    formType,
-    fields: parsed.fields,
-    generatedAt: new Date().toISOString(),
-  };
+  try {
+    const parsed = JSON.parse(cleaned) as { fields: PaperworkResponse["fields"] };
+    if (!Array.isArray(parsed?.fields)) {
+      throw new Error("Response missing fields array");
+    }
+    return { formType, fields: parsed.fields, generatedAt: new Date().toISOString() };
+  } catch {
+    // Gemini occasionally returns prose instead of JSON. Return an empty form
+    // rather than a 500 so the user at least gets a usable (if unfilled) form.
+    logger.warn("paperwork", "Gemini returned non-JSON; serving empty form", {
+      formType,
+    });
+    return { formType, fields: [], generatedAt: new Date().toISOString() };
+  }
 }
+
+// ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   const requestId = getRequestId(request);
@@ -145,15 +176,22 @@ export async function POST(request: NextRequest) {
 
     const { formType, appointmentId } = parsed.data;
 
+    // If the caller specified an appointment, fetch and verify ownership first.
+    // getAppointment() scopes the S3 key to user.sub, so the ownership is
+    // enforced at the storage layer; the explicit null check surfaces a 404
+    // rather than silently omitting the appointment-specific context.
+    let specificAppointment = null;
+    if (appointmentId) {
+      specificAppointment = await getAppointment(user.sub, appointmentId);
+      if (!specificAppointment) {
+        return errorResponse("Appointment not found", 404);
+      }
+    }
+
     const [patient, appointments] = await Promise.all([
       getUserById(user.sub),
       listAppointments(user.sub),
     ]);
-
-    let specificAppointment = null;
-    if (appointmentId) {
-      specificAppointment = await getAppointment(user.sub, appointmentId);
-    }
 
     const recentAppointments = appointments.slice(0, 5);
     const summaries = recentAppointments
@@ -176,7 +214,10 @@ ${
   specificAppointment
     ? `Most Relevant Appointment:\n${specificAppointment.summary ?? specificAppointment.rawTranscript ?? ""}\n\nPrescriptions from this appointment:\n${
         specificAppointment.prescriptions
-          ?.map((p) => `${p.medication} ${p.dosage} ${p.frequency} — ${p.notes ?? ""}`)
+          ?.map(
+            (p) =>
+              `${p.medication} ${p.dosage} ${p.frequency}${p.notes ? ` — ${p.notes}` : ""}`,
+          )
           .join("\n") ?? "none"
       }`
     : ""
@@ -192,7 +233,7 @@ ${summaries || "No appointment history available"}
       requestId,
       userId: user.sub,
       formType,
-      appointmentId,
+      appointmentId: appointmentId ?? null,
       fieldCount: formData.fields.length,
     });
 

@@ -27,7 +27,9 @@ const ChatSchema = z.object({
     .array(
       z.object({
         role: z.enum(["user", "assistant"]),
-        content: z.string(),
+        // Per-message content cap prevents unbounded payloads when 20 messages
+        // are each padded with large strings.
+        content: z.string().max(2000, "Each history message may not exceed 2000 characters"),
       }),
     )
     .max(20, "History is limited to 20 messages")

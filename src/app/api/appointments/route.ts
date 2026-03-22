@@ -18,8 +18,11 @@ const CreateAppointmentSchema = z.object({
   title: z.string().min(1).max(200),
   doctorName: z.string().max(100).optional(),
   specialty: z.string().max(100).optional(),
+  notes: z.string().max(10_000).optional(),
   date: z.string().datetime().optional(),
-  rawTranscript: z.string().optional(),
+  // rawTranscript is accepted on creation but capped to match the dedicated
+  // transcript upload endpoint's limit. Prefer uploading via /transcript.
+  rawTranscript: z.string().max(100_000).optional(),
 });
 
 export async function GET(request: NextRequest) {
